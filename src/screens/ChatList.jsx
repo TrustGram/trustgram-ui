@@ -9,7 +9,7 @@ import {
     Input,
     Placeholder,
 } from "@telegram-apps/telegram-ui"
-import { fetchInbox } from "../api"
+import { fetchInbox, fetchBundleByUsername } from "../api"
 import { MOCK_BOTS } from "../mockBots"
 
 function getInitData() {
@@ -53,12 +53,25 @@ export default function ChatList({ onOpenChat }) {
             .finally(() => setLoading(false))
     }, [])
 
-    function handleNewChat() {
-        const id = parseInt(recipientId.trim(), 10)
-        if (!id) return
-        setNewChatOpen(false)
-        setRecipientId("")
-        onOpenChat(id)
+    async function handleNewChat() {
+        const input = recipientId.trim()
+        if (!input) return
+
+        const isUsername = isNaN(input.replace(/^@/, ""))
+        if (isUsername) {
+            try {
+                const bundle = await fetchBundleByUsername(input, window.Telegram?.WebApp?.initData || null)
+                setNewChatOpen(false)
+                setRecipientId("")
+                onOpenChat(bundle.telegram_id)
+            } catch {
+                alert("User not found")
+            }
+        } else {
+            setNewChatOpen(false)
+            setRecipientId("")
+            onOpenChat(parseInt(input, 10))
+        }
     }
 
     return (
@@ -95,10 +108,9 @@ export default function ChatList({ onOpenChat }) {
             <Modal open={newChatOpen} onOpenChange={setNewChatOpen} header={<Modal.Header>New chat</Modal.Header>}>
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
                     <Input
-                        placeholder="Telegram ID"
+                        placeholder="@username or Telegram ID"
                         value={recipientId}
                         onChange={e => setRecipientId(e.target.value)}
-                        type="number"
                     />
                     <Button onClick={handleNewChat}>Start chat</Button>
                 </div>

@@ -25,6 +25,15 @@ export async function fetchBundle(telegramId, initData) {
     return res.json()
 }
 
+export async function fetchBundleByUsername(username, initData) {
+    const clean = username.replace(/^@/, "")
+    const res = await fetch(`${API_URL}/api/v1/keys/by-username/${clean}`, {
+        headers: headers(initData),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
 export async function fetchInbox(initData) {
     const res = await fetch(`${API_URL}/api/v1/chat/inbox`, {
         headers: headers(initData),
