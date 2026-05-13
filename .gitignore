@@ -1,4 +1,5 @@
 node_modules/
 dist/
+src/lib/
 .env.local
 .env.*.local
