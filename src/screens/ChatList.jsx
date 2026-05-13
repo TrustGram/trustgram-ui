@@ -107,10 +107,15 @@ export default function ChatList({ onOpenChat }) {
 
             <Modal open={newChatOpen} onOpenChange={setNewChatOpen} header={<Modal.Header>New chat</Modal.Header>}>
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-                    <Input
+                    <p style={{ margin: 0, color: "#708499", fontSize: 13 }}>
+                        Enter a Telegram username or ID. The other person must have TrustGram open at least once to register their keys.
+                    </p>
+                    <input
+                        type="text"
                         placeholder="@username or Telegram ID"
                         value={recipientId}
                         onChange={e => setRecipientId(e.target.value)}
+                        style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #444", background: "#1a1a1a", color: "#fff", fontSize: 16, boxSizing: "border-box" }}
                     />
                     <Button onClick={handleNewChat}>Start chat</Button>
                 </div>
