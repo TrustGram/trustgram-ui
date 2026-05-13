@@ -38,7 +38,8 @@ export default function App() {
         return (
             <Chat
                 identity={identity}
-                contactId={activeChat}
+                contactId={activeChat.id}
+                contactName={activeChat.name}
                 onBack={() => setActiveChat(null)}
             />
         )

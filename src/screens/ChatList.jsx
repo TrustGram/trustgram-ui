@@ -64,14 +64,14 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                 const bundle = await fetchBundleByUsername(input, window.Telegram?.WebApp?.initData || null)
                 setNewChatOpen(false)
                 setRecipientId("")
-                onOpenChat(bundle.telegram_id)
+                onOpenChat({ id: bundle.telegram_id, name: `@${input.replace(/^@/, "")}` })
             } catch {
                 alert("User not found")
             }
         } else {
             setNewChatOpen(false)
             setRecipientId("")
-            onOpenChat(parseInt(input, 10))
+            onOpenChat({ id: parseInt(input, 10), name: input })
         }
     }
 
@@ -96,16 +96,19 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                 />
             ) : (
                 <List>
-                    {conversations.map(msg => (
-                        <Cell
-                            key={msg.sender_id}
-                            before={<Avatar>{String(msg.sender_id).slice(-2)}</Avatar>}
-                            subtitle={msg.isMock ? "Test bot" : new Date(msg.timestamp).toLocaleString()}
-                            onClick={() => onOpenChat(msg.sender_id)}
-                        >
-                            {msg.name ?? msg.sender_id}
-                        </Cell>
-                    ))}
+                    {conversations.map(msg => {
+                        const displayName = msg.name ?? (msg.sender_username ? `@${msg.sender_username}` : String(msg.sender_id))
+                        return (
+                            <Cell
+                                key={msg.sender_id}
+                                before={<Avatar>{displayName.slice(-2)}</Avatar>}
+                                subtitle={msg.isMock ? "Test bot" : new Date(msg.timestamp).toLocaleString()}
+                                onClick={() => onOpenChat({ id: msg.sender_id, name: displayName })}
+                            >
+                                {displayName}
+                            </Cell>
+                        )
+                    })}
                 </List>
             )}
 

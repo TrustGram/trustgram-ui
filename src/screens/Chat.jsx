@@ -8,7 +8,7 @@ function getInitData() {
     return window.Telegram?.WebApp?.initData || null
 }
 
-export default function Chat({ identity, contactId, onBack }) {
+export default function Chat({ identity, contactId, contactName, onBack }) {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState("")
     const [loading, setLoading] = useState(true)
@@ -38,23 +38,16 @@ export default function Chat({ identity, contactId, onBack }) {
             for (const msg of mine) {
                 try {
                     const payload = JSON.parse(msg.encrypted_payload)
-
-                    if (!ratchetState.current) {
-                        ratchetState.current = await acceptSession(
-                            identity,
-                            payload.senderInfo.oneTimePreKeyId,
-                            payload.senderInfo.identityKey,
-                            payload.senderInfo.ephemeralKey,
-                        )
-                    }
-
-                    const { plaintext, state: newState } = await decryptMessage(ratchetState.current, payload.message)
-                    ratchetState.current = newState
-
+                    const sessionState = await acceptSession(
+                        identity,
+                        payload.senderInfo.oneTimePreKeyId,
+                        payload.senderInfo.identityKey,
+                        payload.senderInfo.ephemeralKey,
+                    )
+                    const { plaintext } = await decryptMessage(sessionState, payload.message)
                     decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                     await deleteMessage(msg.id, initData)
                 } catch {
-                    // stale message — ratchet state lost on page reload, delete silently
                     await deleteMessage(msg.id, initData).catch(() => {})
                 }
             }
@@ -82,22 +75,14 @@ export default function Chat({ identity, contactId, onBack }) {
                 return
             }
 
-            let senderInfo = null
-            if (!ratchetState.current) {
-                const bundle = await fetchBundle(contactId, initData)
-                const result = await initiateSession(identity, {
-                    identityKey: bundle.identity_key,
-                    signedPreKey: bundle.signed_pre_key,
-                    oneTimePreKey: bundle.one_time_key?.public_key ?? null,
-                })
-                ratchetState.current = result.state
-                senderInfo = result.senderInfo
-            }
-
-            const { message, state: newState } = await encryptMessage(ratchetState.current, text)
-            ratchetState.current = newState
-
-            const payload = JSON.stringify(senderInfo ? { senderInfo, message } : { message })
+            const bundle = await fetchBundle(contactId, initData)
+            const { state: sessionState, senderInfo } = await initiateSession(identity, {
+                identityKey: bundle.identity_key,
+                signedPreKey: bundle.signed_pre_key,
+                oneTimePreKey: bundle.one_time_key?.public_key ?? null,
+            })
+            const { message } = await encryptMessage(sessionState, text)
+            const payload = JSON.stringify({ senderInfo, message })
             await sendMessage(contactId, payload, initData)
         } catch (e) {
             setError(e.message)
@@ -118,7 +103,7 @@ export default function Chat({ identity, contactId, onBack }) {
             {/* Header */}
             <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid #333" }}>
                 <Button size="s" mode="plain" onClick={onBack}>← Back</Button>
-                <span style={{ fontWeight: 600 }}>{isMockBot(contactId) ? mockBotName(contactId) : contactId}</span>
+                <span style={{ fontWeight: 600 }}>{contactName ?? (isMockBot(contactId) ? mockBotName(contactId) : String(contactId))}</span>
             </div>
 
             {/* Messages */}
