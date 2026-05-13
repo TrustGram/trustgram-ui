@@ -3,7 +3,7 @@ import { Spinner } from "@telegram-apps/telegram-ui"
 import Setup from "./screens/Setup"
 import ChatList from "./screens/ChatList"
 import Chat from "./screens/Chat"
-import { loadIdentity, saveIdentity } from "./storage"
+import { loadIdentity, saveIdentity, clearIdentity } from "./storage"
 
 export default function App() {
     const [identity, setIdentity] = useState(null)
@@ -44,5 +44,10 @@ export default function App() {
         )
     }
 
-    return <ChatList onOpenChat={setActiveChat} />
+    async function handleResetKeys() {
+        await clearIdentity()
+        setIdentity(null)
+    }
+
+    return <ChatList onOpenChat={setActiveChat} onResetKeys={handleResetKeys} />
 }

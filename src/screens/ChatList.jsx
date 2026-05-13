@@ -11,6 +11,7 @@ import {
 } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
 import { MOCK_BOTS } from "../mockBots"
+import { saveContact, getContactName } from "../contacts"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -29,7 +30,7 @@ function groupByContact(messages) {
     )
 }
 
-export default function ChatList({ onOpenChat }) {
+export default function ChatList({ onOpenChat, onResetKeys }) {
     const [conversations, setConversations] = useState([])
     const [loading, setLoading] = useState(true)
     const [newChatOpen, setNewChatOpen] = useState(false)
@@ -78,7 +79,10 @@ export default function ChatList({ onOpenChat }) {
         <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: 20, fontWeight: 600 }}>TrustGram</span>
-                <Button size="s" onClick={() => setNewChatOpen(true)}>New chat</Button>
+                <div style={{ display: "flex", gap: 8 }}>
+                    <Button size="s" mode="outline" onClick={onResetKeys}>Reset keys</Button>
+                    <Button size="s" onClick={() => setNewChatOpen(true)}>New chat</Button>
+                </div>
             </div>
 
             {loading ? (
