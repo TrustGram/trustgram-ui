@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react"
 import { List, Cell, Avatar, Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername, fetchBundle, getPendingSessions, initSession, acceptSessionBackend, declineSessionBackend, sendMessage } from "../api"
 import { initiateSession, encryptMessage } from "../crypto"
-import { setConvState } from "../convState"
+import { setConvState, getConvState } from "../convState"
 import { addPendingRequest, removePendingRequest, getPendingRequests } from "../pendingRequests"
 
 function getInitData() {
@@ -50,7 +50,12 @@ export default function ChatList({ identity, onOpenChat, onResetKeys }) {
         if (pendingData.status === "fulfilled") {
             setIncomingRequests(pendingData.value.requests)
         }
-        setOutgoingRequests(getPendingRequests())
+        // Remove pending entries where convState was already updated to accepted/declined/closed
+        const stillPending = getPendingRequests().filter(r => {
+            const s = getConvState(r.contactId)
+            return s !== "accepted" && s !== "declined" && s !== "closed"
+        })
+        setOutgoingRequests(stillPending)
         setLoading(false)
     }
 
@@ -150,30 +155,31 @@ export default function ChatList({ identity, onOpenChat, onResetKeys }) {
                     {/* Incoming requests */}
                     {incomingRequests.map(req => {
                         const name = req.from_username ? `@${req.from_username}` : String(req.from_id)
+                        const initials = name.replace(/^@/, "").slice(0, 2).toUpperCase()
                         const isAccepting = acceptingId === req.from_id
                         return (
-                            <div key={req.from_id} style={{ margin: "8px 12px", background: "#1e2936", borderRadius: 14, padding: 16, borderLeft: "3px solid #2196f3" }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                                    <div style={{ width: 42, height: 42, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
-                                        🔐
+                            <div key={req.from_id} style={{ margin: "8px 12px 0", background: "#1f2b38", borderRadius: 14, overflow: "hidden" }}>
+                                <div style={{ padding: "14px 14px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+                                    <div style={{ width: 46, height: 46, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, flexShrink: 0 }}>
+                                        {initials}
                                     </div>
-                                    <div>
+                                    <div style={{ flex: 1 }}>
                                         <div style={{ fontWeight: 600, fontSize: 15 }}>{name}</div>
-                                        <div style={{ fontSize: 12, color: "#708499", marginTop: 2 }}>wants to start an encrypted chat</div>
+                                        <div style={{ fontSize: 12, color: "#6ab3f3", marginTop: 2 }}>🔐 Encrypted chat request</div>
                                     </div>
                                 </div>
-                                <div style={{ display: "flex", gap: 8 }}>
+                                <div style={{ display: "flex", borderTop: "1px solid #2a3a4a" }}>
                                     <button
                                         onClick={() => handleDecline(req)}
                                         disabled={isAccepting}
-                                        style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#c0392b", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                                        style={{ flex: 1, padding: "13px 0", border: "none", borderRight: "1px solid #2a3a4a", background: "transparent", color: "#e74c3c", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
                                     >
                                         Decline
                                     </button>
                                     <button
                                         onClick={() => handleAccept(req)}
                                         disabled={isAccepting}
-                                        style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#27ae60", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                                        style={{ flex: 1, padding: "13px 0", border: "none", background: "transparent", color: "#2ecc71", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
                                     >
                                         {isAccepting ? "..." : "Accept"}
                                     </button>
