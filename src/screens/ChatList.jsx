@@ -9,7 +9,6 @@ import {
     Placeholder,
 } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
-import { MOCK_BOTS } from "../mockBots"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -28,20 +27,6 @@ function groupByContact(messages) {
     )
 }
 
-const MOCK_CONVERSATIONS = Object.entries(MOCK_BOTS).map(([id, name]) => ({
-    sender_id: Number(id),
-    name,
-    timestamp: new Date(0).toISOString(),
-    isMock: true,
-}))
-
-function buildConversations(messages) {
-    const real = groupByContact(messages)
-    const realIds = new Set(real.map(m => m.sender_id))
-    const uniqueMocks = MOCK_CONVERSATIONS.filter(m => !realIds.has(m.sender_id))
-    return [...real, ...uniqueMocks]
-}
-
 export default function ChatList({ onOpenChat, onResetKeys }) {
     const [conversations, setConversations] = useState([])
     const [loading, setLoading] = useState(true)
@@ -50,13 +35,13 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
 
     useEffect(() => {
         fetchInbox(getInitData())
-            .then(data => setConversations(buildConversations(data.messages)))
-            .catch(() => setConversations(MOCK_CONVERSATIONS))
+            .then(data => setConversations(groupByContact(data.messages)))
+            .catch(() => setConversations([]))
             .finally(() => setLoading(false))
 
         const interval = setInterval(() => {
             fetchInbox(getInitData())
-                .then(data => setConversations(buildConversations(data.messages)))
+                .then(data => setConversations(groupByContact(data.messages)))
                 .catch(() => {})
         }, 5000)
 
@@ -106,12 +91,12 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
             ) : (
                 <List>
                     {conversations.map(msg => {
-                        const displayName = msg.name ?? (msg.sender_username ? `@${msg.sender_username}` : String(msg.sender_id))
+                        const displayName = msg.sender_username ? `@${msg.sender_username}` : String(msg.sender_id)
                         return (
                             <Cell
                                 key={msg.sender_id}
                                 before={<Avatar>{displayName.slice(-2)}</Avatar>}
-                                subtitle={msg.isMock ? "Test bot" : new Date(msg.timestamp).toLocaleString()}
+                                subtitle={new Date(msg.timestamp).toLocaleString()}
                                 onClick={() => onOpenChat({ id: msg.sender_id, name: displayName })}
                             >
                                 {displayName}

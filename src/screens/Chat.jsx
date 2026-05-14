@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from "react"
 import { Button, Input, Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
-import { isMockBot, mockBotName, mockReply } from "../mockBots"
 import { getConvState, setConvState } from "../convState"
 
 function getInitData() {
@@ -27,7 +26,6 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
     }
 
     useEffect(() => {
-        if (isMockBot(contactId)) { setLoading(false); return }
         loadMessages()
         const interval = setInterval(pollMessages, 4000)
         return () => clearInterval(interval)
@@ -47,6 +45,12 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
 
                 if (payload.type === "session_accepted") {
                     updateConvState("accepted")
+                    await deleteMessage(msg.id, initData)
+                    continue
+                }
+
+                if (payload.type === "session_declined") {
+                    updateConvState("declined")
                     await deleteMessage(msg.id, initData)
                     continue
                 }
@@ -99,18 +103,22 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         } catch {}
     }
 
+    async function sendEncryptedControl(type) {
+        const bundle = await fetchBundle(contactId, initData)
+        const { state: sessionState, senderInfo } = await initiateSession(identity, {
+            identityKey: bundle.identity_key,
+            signedPreKey: bundle.signed_pre_key,
+            oneTimePreKey: bundle.one_time_key?.public_key ?? null,
+        })
+        const { message } = await encryptMessage(sessionState, type)
+        await sendMessage(contactId, JSON.stringify({ type, senderInfo, message }), initData)
+    }
+
     async function sendSessionRequest() {
         setSending(true)
         setError(null)
         try {
-            const bundle = await fetchBundle(contactId, initData)
-            const { state: sessionState, senderInfo } = await initiateSession(identity, {
-                identityKey: bundle.identity_key,
-                signedPreKey: bundle.signed_pre_key,
-                oneTimePreKey: bundle.one_time_key?.public_key ?? null,
-            })
-            const { message } = await encryptMessage(sessionState, "session_request")
-            await sendMessage(contactId, JSON.stringify({ type: "session_request", senderInfo, message }), initData)
+            await sendEncryptedControl("session_request")
             updateConvState("requested")
         } catch (e) {
             setError(e.message)
@@ -123,15 +131,21 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         setSending(true)
         setError(null)
         try {
-            const bundle = await fetchBundle(contactId, initData)
-            const { state: sessionState, senderInfo } = await initiateSession(identity, {
-                identityKey: bundle.identity_key,
-                signedPreKey: bundle.signed_pre_key,
-                oneTimePreKey: bundle.one_time_key?.public_key ?? null,
-            })
-            const { message } = await encryptMessage(sessionState, "session_accepted")
-            await sendMessage(contactId, JSON.stringify({ type: "session_accepted", senderInfo, message }), initData)
+            await sendEncryptedControl("session_accepted")
             updateConvState("accepted")
+        } catch (e) {
+            setError(e.message)
+        } finally {
+            setSending(false)
+        }
+    }
+
+    async function declineRequest() {
+        setSending(true)
+        setError(null)
+        try {
+            await sendEncryptedControl("session_declined")
+            updateConvState("declined")
         } catch (e) {
             setError(e.message)
         } finally {
@@ -147,13 +161,6 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         setInput("")
         try {
             setMessages(prev => [...prev, { id: Date.now(), from: "me", text, timestamp: new Date().toISOString() }])
-
-            if (isMockBot(contactId)) {
-                const reply = await mockReply(contactId, text)
-                setMessages(prev => [...prev, reply])
-                return
-            }
-
             const bundle = await fetchBundle(contactId, initData)
             const { state: sessionState, senderInfo } = await initiateSession(identity, {
                 identityKey: bundle.identity_key,
@@ -173,7 +180,7 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
     }
 
-    const displayName = contactName ?? (isMockBot(contactId) ? mockBotName(contactId) : String(contactId))
+    const displayName = contactName ?? String(contactId)
 
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
@@ -185,11 +192,39 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
             <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
                 {loading ? (
                     <div style={{ display: "flex", justifyContent: "center", marginTop: 40 }}><Spinner size="l" /></div>
+                ) : convState === "request_received" ? (
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <div style={{ background: "#1e2936", borderRadius: 16, padding: 24, maxWidth: 300, width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 16, textAlign: "center" }}>
+                            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>
+                                🔒
+                            </div>
+                            <div>
+                                <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>{displayName}</div>
+                                <div style={{ color: "#708499", fontSize: 13 }}>wants to start an encrypted chat with you</div>
+                            </div>
+                            <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                                <button
+                                    onClick={declineRequest}
+                                    disabled={sending}
+                                    style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: "#c0392b", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
+                                >
+                                    Decline
+                                </button>
+                                <button
+                                    onClick={acceptRequest}
+                                    disabled={sending}
+                                    style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: "#27ae60", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
+                                >
+                                    Accept
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 ) : messages.length === 0 ? (
                     <Placeholder description={
                         convState === "new" ? "Send a chat request to start" :
                         convState === "requested" ? "Waiting for reply..." :
-                        convState === "request_received" ? `${displayName} wants to chat` :
+                        convState === "declined" ? "Chat request was declined" :
                         "No messages yet. Say hello!"
                     } />
                 ) : (
@@ -213,7 +248,7 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
 
             {error && <div style={{ padding: "6px 16px", color: "#ff6b6b", fontSize: 13 }}>{error}</div>}
 
-            {isMockBot(contactId) || convState === "accepted" ? (
+            {convState === "accepted" ? (
                 <div style={{ padding: "8px 16px 16px", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid #333" }}>
                     <div style={{ flex: 1 }}>
                         <Input placeholder="Message..." value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={sending} />
@@ -236,15 +271,6 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
                     <p style={{ margin: 0, color: "#708499", fontSize: 13, textAlign: "center" }}>
                         Waiting for {displayName} to accept...
                     </p>
-                </div>
-            ) : convState === "request_received" ? (
-                <div style={{ padding: 16, borderTop: "1px solid #333", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <p style={{ margin: 0, color: "#fff", fontSize: 14, textAlign: "center" }}>
-                        {displayName} wants to start an encrypted chat
-                    </p>
-                    <Button onClick={acceptRequest} disabled={sending}>
-                        {sending ? <Spinner size="s" /> : "Accept"}
-                    </Button>
                 </div>
             ) : null}
         </div>
