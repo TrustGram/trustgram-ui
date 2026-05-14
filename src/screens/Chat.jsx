@@ -3,6 +3,7 @@ import { Button, Input, Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
 import { getConvState, setConvState } from "../convState"
+import { removePendingRequest } from "../pendingRequests"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -45,6 +46,7 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
 
                 if (payload.type === "session_accepted") {
                     updateConvState("accepted")
+                    removePendingRequest(contactId)
                     await deleteMessage(msg.id, initData)
                     continue
                 }
@@ -112,19 +114,6 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         })
         const { message } = await encryptMessage(sessionState, type)
         await sendMessage(contactId, JSON.stringify({ type, senderInfo, message }), initData)
-    }
-
-    async function sendSessionRequest() {
-        setSending(true)
-        setError(null)
-        try {
-            await sendEncryptedControl("session_request")
-            updateConvState("requested")
-        } catch (e) {
-            setError(e.message)
-        } finally {
-            setSending(false)
-        }
     }
 
     async function acceptRequest() {
@@ -257,16 +246,7 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
                         {sending ? <Spinner size="s" /> : "Send"}
                     </Button>
                 </div>
-            ) : convState === "new" ? (
-                <div style={{ padding: 16, borderTop: "1px solid #333", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <p style={{ margin: 0, color: "#708499", fontSize: 13 }}>
-                        Start an encrypted conversation with {displayName}.
-                    </p>
-                    <Button onClick={sendSessionRequest} disabled={sending}>
-                        {sending ? <Spinner size="s" /> : "Send chat request"}
-                    </Button>
-                </div>
-            ) : convState === "requested" ? (
+            ) : convState === "new" || convState === "requested" ? (
                 <div style={{ padding: 16, borderTop: "1px solid #333" }}>
                     <p style={{ margin: 0, color: "#708499", fontSize: 13, textAlign: "center" }}>
                         Waiting for {displayName} to accept...

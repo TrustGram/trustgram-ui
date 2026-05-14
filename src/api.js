@@ -60,3 +60,41 @@ export async function deleteMessage(messageId, initData) {
     if (!res.ok) throw new Error(await res.text())
     return res.json()
 }
+
+export async function initSession(toId, initData) {
+    const res = await fetch(`${API_URL}/api/v1/session/init`, {
+        method: "POST",
+        headers: headers(initData),
+        body: JSON.stringify({ to_id: toId }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
+export async function getPendingSessions(initData) {
+    const res = await fetch(`${API_URL}/api/v1/session/pending`, {
+        headers: headers(initData),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
+export async function acceptSessionBackend(fromId, initData) {
+    const res = await fetch(`${API_URL}/api/v1/session/accept`, {
+        method: "POST",
+        headers: headers(initData),
+        body: JSON.stringify({ from_id: fromId }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
+export async function declineSessionBackend(fromId, initData) {
+    const res = await fetch(`${API_URL}/api/v1/session/decline`, {
+        method: "POST",
+        headers: headers(initData),
+        body: JSON.stringify({ from_id: fromId }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
