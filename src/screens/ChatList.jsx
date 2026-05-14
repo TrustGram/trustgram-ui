@@ -6,12 +6,10 @@ import {
     Button,
     Spinner,
     Modal,
-    Input,
     Placeholder,
 } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
 import { MOCK_BOTS } from "../mockBots"
-import { saveContact, getContactName } from "../contacts"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -30,6 +28,20 @@ function groupByContact(messages) {
     )
 }
 
+const MOCK_CONVERSATIONS = Object.entries(MOCK_BOTS).map(([id, name]) => ({
+    sender_id: Number(id),
+    name,
+    timestamp: new Date(0).toISOString(),
+    isMock: true,
+}))
+
+function buildConversations(messages) {
+    const real = groupByContact(messages)
+    const realIds = new Set(real.map(m => m.sender_id))
+    const uniqueMocks = MOCK_CONVERSATIONS.filter(m => !realIds.has(m.sender_id))
+    return [...real, ...uniqueMocks]
+}
+
 export default function ChatList({ onOpenChat, onResetKeys }) {
     const [conversations, setConversations] = useState([])
     const [loading, setLoading] = useState(true)
@@ -37,21 +49,18 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
     const [recipientId, setRecipientId] = useState("")
 
     useEffect(() => {
-        const mocks = Object.entries(MOCK_BOTS).map(([id, name]) => ({
-            sender_id: Number(id),
-            name,
-            timestamp: new Date(0).toISOString(),
-            isMock: true,
-        }))
         fetchInbox(getInitData())
-            .then(data => {
-                const real = groupByContact(data.messages)
-                const realIds = new Set(real.map(m => m.sender_id))
-                const uniqueMocks = mocks.filter(m => !realIds.has(m.sender_id))
-                setConversations([...real, ...uniqueMocks])
-            })
-            .catch(() => setConversations(mocks))
+            .then(data => setConversations(buildConversations(data.messages)))
+            .catch(() => setConversations(MOCK_CONVERSATIONS))
             .finally(() => setLoading(false))
+
+        const interval = setInterval(() => {
+            fetchInbox(getInitData())
+                .then(data => setConversations(buildConversations(data.messages)))
+                .catch(() => {})
+        }, 5000)
+
+        return () => clearInterval(interval)
     }, [])
 
     async function handleNewChat() {
@@ -61,7 +70,7 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
         const isUsername = isNaN(input.replace(/^@/, ""))
         if (isUsername) {
             try {
-                const bundle = await fetchBundleByUsername(input, window.Telegram?.WebApp?.initData || null)
+                const bundle = await fetchBundleByUsername(input, getInitData())
                 setNewChatOpen(false)
                 setRecipientId("")
                 onOpenChat({ id: bundle.telegram_id, name: `@${input.replace(/^@/, "")}` })
