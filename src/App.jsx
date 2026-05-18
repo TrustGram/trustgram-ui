@@ -5,6 +5,7 @@ import ChatList from "./screens/ChatList"
 import Chat from "./screens/Chat"
 import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey } from "./storage"
 import { clearAllMessages } from "./messageStore"
+import { clearContacts } from "./contacts"
 
 export default function App() {
     const [identity, setIdentity] = useState(null)
@@ -29,6 +30,7 @@ export default function App() {
 
     async function handleResetKeys() {
         clearAllMessages()
+        clearContacts()
         await clearIdentity()
         setIdentity(null)
         const newKey = await getOrCreateStorageKey()
