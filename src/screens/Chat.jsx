@@ -8,6 +8,12 @@ function getInitData() {
     return window.Telegram?.WebApp?.initData || null
 }
 
+function mergeDedupe(a, b) {
+    const seen = new Set(a.map(m => m.id))
+    const novel = b.filter(m => !seen.has(m.id))
+    return [...a, ...novel].sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp))
+}
+
 export default function Chat({ identity, storageKey, contactId, contactName, onBack }) {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState("")
@@ -26,50 +32,16 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     }
 
     useEffect(() => {
+        let interval
         loadHistory().then(() => {
-            const interval = setInterval(pollMessages, 4000)
-            return () => clearInterval(interval)
+            interval = setInterval(pollMessages, 4000)
         })
+        return () => clearInterval(interval)
     }, [])
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [messages])
-
-    async function loadHistory() {
-        setLoading(true)
-        try {
-            const [history, inbox] = await Promise.all([
-                storageKey ? loadMessages(contactId, storageKey) : Promise.resolve([]),
-                fetchInbox(initData),
-            ])
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            const merged = mergeDedupe(history, decrypted)
-            updateMessages(merged)
-        } catch (e) {
-            setError(e.message)
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    async function pollMessages() {
-        try {
-            const inbox = await fetchInbox(initData)
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            if (decrypted.length > 0) {
-                const merged = mergeDedupe(messagesRef.current, decrypted)
-                updateMessages(merged)
-            }
-        } catch {}
-    }
-
-    // Merge two message arrays, deduplicate by id, keep chronological order
-    function mergeDedupe(existing, incoming) {
-        const seen = new Set(existing.map(m => m.id))
-        const novel = incoming.filter(m => !seen.has(m.id))
-        return [...existing, ...novel].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-    }
 
     async function decryptInboxMessages(msgs) {
         const mine = msgs.filter(m => m.sender_id === contactId)
@@ -100,17 +72,48 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         return decrypted
     }
 
+    async function loadHistory() {
+        setLoading(true)
+        try {
+            const [history, inbox] = await Promise.all([
+                storageKey ? loadMessages(contactId, storageKey) : Promise.resolve([]),
+                fetchInbox(initData),
+            ])
+            const decrypted = await decryptInboxMessages(inbox.messages)
+            // Merge stored history + any messages already in state (from concurrent poll) + new inbox
+            const merged = mergeDedupe(mergeDedupe(history, messagesRef.current), decrypted)
+            updateMessages(merged)
+        } catch (e) {
+            setError(e.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    async function pollMessages() {
+        try {
+            const inbox = await fetchInbox(initData)
+            const decrypted = await decryptInboxMessages(inbox.messages)
+            if (decrypted.length > 0) {
+                updateMessages(mergeDedupe(messagesRef.current, decrypted))
+            }
+        } catch {}
+    }
+
     async function handleSend() {
         if (!input.trim()) return
         setSending(true)
         setError(null)
         const text = input.trim()
-        const timestamp = new Date().toISOString()
-        const tempId = `me_${Date.now()}`
         setInput("")
         inputRef.current?.focus()
         try {
-            const optimistic = [...messagesRef.current, { id: tempId, from: "me", text, timestamp }]
+            const optimistic = mergeDedupe(messagesRef.current, [{
+                id: `me_${Date.now()}`,
+                from: "me",
+                text,
+                timestamp: new Date().toISOString(),
+            }])
             updateMessages(optimistic)
 
             const bundle = await fetchBundle(contactId, initData)
@@ -138,11 +141,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
 
-            {/* Header */}
             <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, background: "#1f2b38", borderBottom: "1px solid #2a3a4a", flexShrink: 0 }}>
-                <button onClick={onBack} style={{ background: "none", border: "none", color: "#6ab3f3", fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>
-                    ←
-                </button>
+                <button onClick={onBack} style={{ background: "none", border: "none", color: "#6ab3f3", fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>←</button>
                 <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>
                     {initials}
                 </div>
@@ -152,7 +152,6 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 </div>
             </div>
 
-            {/* Messages */}
             <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
                 {loading ? (
                     <div style={{ display: "flex", justifyContent: "center", marginTop: 40 }}><Spinner size="l" /></div>
@@ -164,11 +163,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                             <div style={{
                                 background: msg.from === "me" ? "#2b5278" : "#1f2b38",
                                 borderRadius: msg.from === "me" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                                padding: "9px 13px",
-                                maxWidth: "78%",
-                                fontSize: 14,
-                                lineHeight: 1.45,
-                                wordBreak: "break-word",
+                                padding: "9px 13px", maxWidth: "78%", fontSize: 14, lineHeight: 1.45, wordBreak: "break-word",
                             }}>
                                 {msg.text}
                             </div>
@@ -183,7 +178,6 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
             {error && <div style={{ padding: "4px 16px", color: "#ff6b6b", fontSize: 12, background: "#1f2b38" }}>{error}</div>}
 
-            {/* Input area */}
             <div style={{ padding: "8px 10px 12px", background: "#1f2b38", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
                 <div style={{ flex: 1, background: "#17212b", borderRadius: 22, padding: "10px 16px", display: "flex", alignItems: "center" }}>
                     <input
@@ -203,7 +197,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     style={{
                         width: 44, height: 44, borderRadius: "50%", border: "none", flexShrink: 0,
                         background: input.trim() ? "#2b5278" : "#2a3a4a",
-                        color: "#fff", fontSize: 18, cursor: input.trim() ? "pointer" : "default",
+                        color: "#fff", cursor: input.trim() ? "pointer" : "default",
                         display: "flex", alignItems: "center", justifyContent: "center",
                         transition: "background 0.15s",
                     }}
