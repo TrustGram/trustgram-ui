@@ -9,10 +9,15 @@ function getInitData() {
     return window.Telegram?.WebApp?.initData || null
 }
 
+function parseTs(ts) {
+    const d = new Date(ts)
+    return isNaN(d) ? 0 : d.getTime()
+}
+
 function mergeDedupe(a, b) {
     const seen = new Set(a.map(m => m.id))
     const novel = b.filter(m => !seen.has(m.id))
-    return [...a, ...novel].sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp))
+    return [...a, ...novel].sort((x, y) => parseTs(x.timestamp) - parseTs(y.timestamp))
 }
 
 export default function Chat({ identity, storageKey, contactId, contactName, onBack, onIdentityRefresh }) {
@@ -205,7 +210,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                                 {msg.text}
                             </div>
                             <div style={{ fontSize: 11, color: "#708499", marginTop: 3, paddingLeft: 4, paddingRight: 4 }}>
-                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                {parseTs(msg.timestamp) ? new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
                             </div>
                         </div>
                     ))
