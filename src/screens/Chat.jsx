@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
+import { loadMessages, saveMessages } from "../messageStore"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
 }
 
-export default function Chat({ identity, contactId, contactName, onBack }) {
+export default function Chat({ identity, storageKey, contactId, contactName, onBack }) {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState("")
     const [loading, setLoading] = useState(true)
@@ -15,17 +16,60 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
     const [error, setError] = useState(null)
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
+    const messagesRef = useRef([])
     const initData = getInitData()
 
+    function updateMessages(msgs) {
+        messagesRef.current = msgs
+        setMessages(msgs)
+        if (storageKey) saveMessages(contactId, msgs, storageKey).catch(() => {})
+    }
+
     useEffect(() => {
-        loadMessages()
-        const interval = setInterval(pollMessages, 4000)
-        return () => clearInterval(interval)
+        loadHistory().then(() => {
+            const interval = setInterval(pollMessages, 4000)
+            return () => clearInterval(interval)
+        })
     }, [])
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [messages])
+
+    async function loadHistory() {
+        setLoading(true)
+        try {
+            const [history, inbox] = await Promise.all([
+                storageKey ? loadMessages(contactId, storageKey) : Promise.resolve([]),
+                fetchInbox(initData),
+            ])
+            const decrypted = await decryptInboxMessages(inbox.messages)
+            const merged = mergeDedupe(history, decrypted)
+            updateMessages(merged)
+        } catch (e) {
+            setError(e.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    async function pollMessages() {
+        try {
+            const inbox = await fetchInbox(initData)
+            const decrypted = await decryptInboxMessages(inbox.messages)
+            if (decrypted.length > 0) {
+                const merged = mergeDedupe(messagesRef.current, decrypted)
+                updateMessages(merged)
+            }
+        } catch {}
+    }
+
+    // Merge two message arrays, deduplicate by id, keep chronological order
+    function mergeDedupe(existing, incoming) {
+        const seen = new Set(existing.map(m => m.id))
+        const novel = incoming.filter(m => !seen.has(m.id))
+        return [...existing, ...novel].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    }
 
     async function decryptInboxMessages(msgs) {
         const mine = msgs.filter(m => m.sender_id === contactId)
@@ -35,7 +79,6 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
 
-                // Skip leftover session control messages from old flow
                 if (payload.type && payload.type !== "message") {
                     await deleteMessage(msg.id, initData).catch(() => {})
                     continue
@@ -57,36 +100,19 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
         return decrypted
     }
 
-    async function loadMessages() {
-        setLoading(true)
-        try {
-            const inbox = await fetchInbox(initData)
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            setMessages(decrypted)
-        } catch (e) {
-            setError(e.message)
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    async function pollMessages() {
-        try {
-            const inbox = await fetchInbox(initData)
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            if (decrypted.length > 0) setMessages(prev => [...prev, ...decrypted])
-        } catch {}
-    }
-
     async function handleSend() {
         if (!input.trim()) return
         setSending(true)
         setError(null)
         const text = input.trim()
+        const timestamp = new Date().toISOString()
+        const tempId = `me_${Date.now()}`
         setInput("")
         inputRef.current?.focus()
         try {
-            setMessages(prev => [...prev, { id: Date.now(), from: "me", text, timestamp: new Date().toISOString() }])
+            const optimistic = [...messagesRef.current, { id: tempId, from: "me", text, timestamp }]
+            updateMessages(optimistic)
+
             const bundle = await fetchBundle(contactId, initData)
             const { state: sessionState, senderInfo } = await initiateSession(identity, {
                 identityKey: bundle.identity_key,
@@ -95,8 +121,11 @@ export default function Chat({ identity, contactId, contactName, onBack }) {
             })
             const { message } = await encryptMessage(sessionState, text)
             await sendMessage(contactId, JSON.stringify({ type: "message", senderInfo, message }), initData)
-        } catch (e) { setError(e.message) }
-        finally { setSending(false) }
+        } catch (e) {
+            setError(e.message)
+        } finally {
+            setSending(false)
+        }
     }
 
     function handleKeyDown(e) {

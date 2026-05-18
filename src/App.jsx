@@ -3,16 +3,21 @@ import { Spinner } from "@telegram-apps/telegram-ui"
 import Setup from "./screens/Setup"
 import ChatList from "./screens/ChatList"
 import Chat from "./screens/Chat"
-import { loadIdentity, saveIdentity, clearIdentity } from "./storage"
+import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey } from "./storage"
+import { clearAllMessages } from "./messageStore"
 
 export default function App() {
     const [identity, setIdentity] = useState(null)
+    const [storageKey, setStorageKey] = useState(null)
     const [loading, setLoading] = useState(true)
     const [activeChat, setActiveChat] = useState(null)
 
     useEffect(() => {
-        loadIdentity()
-            .then(saved => { if (saved) setIdentity(saved) })
+        Promise.all([loadIdentity(), getOrCreateStorageKey()])
+            .then(([saved, key]) => {
+                if (saved) setIdentity(saved)
+                setStorageKey(key)
+            })
             .catch(console.error)
             .finally(() => setLoading(false))
     }, [])
@@ -20,6 +25,14 @@ export default function App() {
     async function handleSetupDone(newIdentity) {
         await saveIdentity(newIdentity)
         setIdentity(newIdentity)
+    }
+
+    async function handleResetKeys() {
+        clearAllMessages()
+        await clearIdentity()
+        setIdentity(null)
+        const newKey = await getOrCreateStorageKey()
+        setStorageKey(newKey)
     }
 
     if (loading) {
@@ -38,16 +51,12 @@ export default function App() {
         return (
             <Chat
                 identity={identity}
+                storageKey={storageKey}
                 contactId={activeChat.id}
                 contactName={activeChat.name}
                 onBack={() => setActiveChat(null)}
             />
         )
-    }
-
-    async function handleResetKeys() {
-        await clearIdentity()
-        setIdentity(null)
     }
 
     return <ChatList onOpenChat={setActiveChat} onResetKeys={handleResetKeys} />
