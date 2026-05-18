@@ -50,5 +50,5 @@ export default function App() {
         setIdentity(null)
     }
 
-    return <ChatList identity={identity} onOpenChat={setActiveChat} onResetKeys={handleResetKeys} />
+    return <ChatList onOpenChat={setActiveChat} onResetKeys={handleResetKeys} />
 }
