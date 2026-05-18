@@ -118,18 +118,23 @@ async function x3dhSend(myIdentityKey, recipientBundle) {
   const ephemeralKey = await generateKeyPair();
   const theirIK = await importPublicKey(recipientBundle.identityKey);
   const theirSPK = await importPublicKey(recipientBundle.signedPreKey);
-  const theirOPK = await importPublicKey(recipientBundle.oneTimePreKey);
   const dh1 = await deriveBits(myIdentityKey.privateKey, theirSPK);
   const dh2 = await deriveBits(ephemeralKey.privateKey, theirIK);
   const dh3 = await deriveBits(ephemeralKey.privateKey, theirSPK);
-  const dh4 = await deriveBits(ephemeralKey.privateKey, theirOPK);
-  const masterSecret = await combineDH(dh1, dh2, dh3, dh4);
+  let masterSecret;
+  if (recipientBundle.oneTimePreKey) {
+    const theirOPK = await importPublicKey(recipientBundle.oneTimePreKey);
+    const dh4 = await deriveBits(ephemeralKey.privateKey, theirOPK);
+    masterSecret = await combineDH(dh1, dh2, dh3, dh4);
+  } else {
+    masterSecret = await combineDH3(dh1, dh2, dh3);
+  }
   return {
     masterSecret,
     senderBundle: {
       identityKey: await exportPublicKey(myIdentityKey.publicKey),
       ephemeralKey: await exportPublicKey(ephemeralKey.publicKey),
-      oneTimePreKeyId: recipientBundle.oneTimePreKey
+      oneTimePreKeyId: recipientBundle.oneTimePreKey ?? null
     }
   };
 }
@@ -139,8 +144,11 @@ async function x3dhReceive(myIdentityKey, mySignedPreKey, myOneTimePreKey, sende
   const dh1 = await deriveBits(mySignedPreKey.privateKey, theirIK);
   const dh2 = await deriveBits(myIdentityKey.privateKey, theirEK);
   const dh3 = await deriveBits(mySignedPreKey.privateKey, theirEK);
-  const dh4 = await deriveBits(myOneTimePreKey.privateKey, theirEK);
-  return combineDH(dh1, dh2, dh3, dh4);
+  if (myOneTimePreKey) {
+    const dh4 = await deriveBits(myOneTimePreKey.privateKey, theirEK);
+    return combineDH(dh1, dh2, dh3, dh4);
+  }
+  return combineDH3(dh1, dh2, dh3);
 }
 async function combineDH(dh1, dh2, dh3, dh4) {
   const combined = new Uint8Array(128);
@@ -148,6 +156,14 @@ async function combineDH(dh1, dh2, dh3, dh4) {
   combined.set(new Uint8Array(dh2), 32);
   combined.set(new Uint8Array(dh3), 64);
   combined.set(new Uint8Array(dh4), 96);
+  const salt = new Uint8Array(32).fill(0).buffer;
+  return hkdf(combined.buffer, salt, "TrustGram_X3DH_v1");
+}
+async function combineDH3(dh1, dh2, dh3) {
+  const combined = new Uint8Array(96);
+  combined.set(new Uint8Array(dh1), 0);
+  combined.set(new Uint8Array(dh2), 32);
+  combined.set(new Uint8Array(dh3), 64);
   const salt = new Uint8Array(32).fill(0).buffer;
   return hkdf(combined.buffer, salt, "TrustGram_X3DH_v1");
 }
@@ -301,14 +317,16 @@ async function initiateSession(myIdentity, theirBundle) {
 }
 async function acceptSession(myIdentity, usedOneTimePreKey, senderIdentityKey, senderEphemeralKey) {
   let usedOPK = null;
-  for (const kp of myIdentity.oneTimePreKeys) {
-    const pub = await exportPublicKey(kp.publicKey);
-    if (pub === usedOneTimePreKey) {
-      usedOPK = kp;
-      break;
+  if (usedOneTimePreKey) {
+    for (const kp of myIdentity.oneTimePreKeys) {
+      const pub = await exportPublicKey(kp.publicKey);
+      if (pub === usedOneTimePreKey) {
+        usedOPK = kp;
+        break;
+      }
     }
+    if (!usedOPK) throw new Error("One-time pre-key not found");
   }
-  if (!usedOPK) throw new Error("One-time pre-key not found");
   const masterSecret = await x3dhReceive(
     myIdentity.identityKey,
     myIdentity.signedPreKey,

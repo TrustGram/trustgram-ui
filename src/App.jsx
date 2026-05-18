@@ -28,9 +28,15 @@ export default function App() {
         setIdentity(newIdentity)
     }
 
+    async function handleIdentityRefresh() {
+        const refreshed = await loadIdentity()
+        if (refreshed) setIdentity(refreshed)
+    }
+
     async function handleResetKeys() {
         clearAllMessages()
         clearContacts()
+        localStorage.removeItem("tg_otk_remaining")
         await clearIdentity()
         setIdentity(null)
         const newKey = await getOrCreateStorageKey()
@@ -57,6 +63,7 @@ export default function App() {
                 contactId={activeChat.id}
                 contactName={activeChat.name}
                 onBack={() => setActiveChat(null)}
+                onIdentityRefresh={handleIdentityRefresh}
             />
         )
     }

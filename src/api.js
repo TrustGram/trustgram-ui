@@ -60,3 +60,13 @@ export async function deleteMessage(messageId, initData) {
     if (!res.ok) throw new Error(await res.text())
     return res.json()
 }
+
+export async function refillOTKs(oneTimeKeys, initData) {
+    const res = await fetch(`${API_URL}/api/v1/keys/otk`, {
+        method: "POST",
+        headers: headers(initData),
+        body: JSON.stringify({ one_time_keys: oneTimeKeys }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}

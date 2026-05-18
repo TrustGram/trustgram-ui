@@ -68,3 +68,11 @@ export async function clearIdentity() {
     await idbDelete(db, "identity")
     await idbDelete(db, "storage_key")
 }
+
+export async function appendOTKsToIdentity(newPairs) {
+    const db = await openDB()
+    const identity = await idbGet(db, "identity")
+    if (!identity) return
+    identity.oneTimePreKeys = [...identity.oneTimePreKeys, ...newPairs]
+    await idbPut(db, "identity", identity)
+}

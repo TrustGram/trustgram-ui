@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
-import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
+import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
 import { loadMessages, saveMessages } from "../messageStore"
+import { appendOTKsToIdentity } from "../storage"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -14,7 +15,7 @@ function mergeDedupe(a, b) {
     return [...a, ...novel].sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp))
 }
 
-export default function Chat({ identity, storageKey, contactId, contactName, onBack }) {
+export default function Chat({ identity, storageKey, contactId, contactName, onBack, onIdentityRefresh }) {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState("")
     const [loading, setLoading] = useState(true)
@@ -23,7 +24,42 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
     const messagesRef = useRef([])
+    const identityRef = useRef(identity)
+    const refillInProgress = useRef(false)
     const initData = getInitData()
+
+    useEffect(() => { identityRef.current = identity }, [identity])
+
+    async function maybeRefillOTKs() {
+        if (refillInProgress.current) return
+        const OTK_BATCH = 10
+        const OTK_THRESHOLD_KEY = "tg_otk_remaining"
+        const remaining = parseInt(localStorage.getItem(OTK_THRESHOLD_KEY) ?? "10", 10)
+        if (remaining > 3) {
+            localStorage.setItem(OTK_THRESHOLD_KEY, String(remaining - 1))
+            return
+        }
+        refillInProgress.current = true
+        try {
+            const pairs = await Promise.all(
+                Array.from({ length: OTK_BATCH }, () =>
+                    crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"])
+                )
+            )
+            const oneTimeKeys = await Promise.all(
+                pairs.map(async (kp, i) => {
+                    const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
+                    const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+                    return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
+                })
+            )
+            await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
+            await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
+            localStorage.setItem(OTK_THRESHOLD_KEY, String(OTK_BATCH))
+            if (onIdentityRefresh) await onIdentityRefresh()
+        } catch {}
+        refillInProgress.current = false
+    }
 
     function updateMessages(msgs) {
         messagesRef.current = msgs
@@ -57,7 +93,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 }
 
                 const sessionState = await acceptSession(
-                    identity,
+                    identityRef.current,
                     payload.senderInfo.oneTimePreKeyId,
                     payload.senderInfo.identityKey,
                     payload.senderInfo.ephemeralKey,
@@ -65,6 +101,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 const { plaintext } = await decryptMessage(sessionState, payload.message)
                 decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                 await deleteMessage(msg.id, initData)
+                maybeRefillOTKs().catch(() => {})
             } catch {
                 await deleteMessage(msg.id, initData).catch(() => {})
             }
@@ -117,7 +154,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             updateMessages(optimistic)
 
             const bundle = await fetchBundle(contactId, initData)
-            const { state: sessionState, senderInfo } = await initiateSession(identity, {
+            const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
                 identityKey: bundle.identity_key,
                 signedPreKey: bundle.signed_pre_key,
                 oneTimePreKey: bundle.one_time_key?.public_key ?? null,
