@@ -107,7 +107,10 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                 await deleteMessage(msg.id, initData)
                 maybeRefillOTKs().catch(() => {})
-            } catch {
+            } catch (err) {
+                const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 12) ?? "null" } catch { return "?" } })()
+                console.error("[TrustGram] decrypt failed for msg", msg.id, "otk:", otkSnippet, err?.message, err)
+                decrypted.push({ id: msg.id, from: "them", text: "🔒 [не удалось расшифровать]", timestamp: msg.timestamp })
                 await deleteMessage(msg.id, initData).catch(() => {})
             }
         }
@@ -167,6 +170,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             const { message } = await encryptMessage(sessionState, text)
             await sendMessage(contactId, JSON.stringify({ type: "message", senderInfo, message }), initData)
         } catch (e) {
+            console.error("[TrustGram] send failed:", e)
             setError(e.message)
         } finally {
             setSending(false)
