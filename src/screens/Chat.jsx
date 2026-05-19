@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
-import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
+import { initiateSession, encryptMessage, decryptMessage, acceptSession, computeFingerprint } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity } from "../storage"
@@ -33,6 +33,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const [error, setError] = useState(null)
     const [debugLog, setDebugLog] = useState([])
     const [deleteConfirm, setDeleteConfirm] = useState(false)
+    const [safetyNumbers, setSafetyNumbers] = useState(null) // null | { display, loading }
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
     const messagesRef = useRef([])
@@ -205,6 +206,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         onBack()
     }
 
+    async function handleShowSafetyNumbers() {
+        setSafetyNumbers({ display: null, loading: true })
+        try {
+            const bundle = await fetchBundle(contactId, initData)
+            const { display } = await computeFingerprint(identityRef.current, bundle.identity_key)
+            setSafetyNumbers({ display, loading: false })
+        } catch (e) {
+            setSafetyNumbers(null)
+            setError(e.message)
+        }
+    }
+
     const displayName = contactName ?? String(contactId)
     const initials = displayName.replace(/^@/, "").slice(0, 2).toUpperCase()
     const [debugOpen, setDebugOpen] = useState(false)
@@ -223,6 +236,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
                     <div style={{ fontSize: 11, color: "#6ab3f3", cursor: "pointer" }} onClick={() => setDebugOpen(o => !o)}>🔒 End-to-end encrypted{debugLog.length > 0 ? ` · ${debugLog.length}` : ""}</div>
                 </div>
+                <button onClick={handleShowSafetyNumbers} title="Verify safety numbers" style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}>
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </button>
                 {deleteConfirm ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 12, color: "#ff6b6b" }}>Delete chat?</span>
@@ -235,6 +251,32 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     </button>
                 )}
             </div>
+
+            {safetyNumbers !== null && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={() => setSafetyNumbers(null)}>
+                    <div style={{ background: "#1f2b38", borderRadius: 16, padding: "28px 24px", maxWidth: 340, width: "100%", textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>🛡️</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Safety Numbers</div>
+                        <div style={{ fontSize: 13, color: "#708499", marginBottom: 20, lineHeight: 1.5 }}>
+                            Compare these numbers with <b style={{ color: "#a0b8cc" }}>{displayName}</b> via another channel. If they match — your connection is secure.
+                        </div>
+                        {safetyNumbers.loading ? (
+                            <div style={{ display: "flex", justifyContent: "center", padding: 16 }}><Spinner size="m" /></div>
+                        ) : (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20 }}>
+                                {safetyNumbers.display.split(" ").map((group, i) => (
+                                    <div key={i} style={{ background: "#17212b", borderRadius: 8, padding: "10px 4px", fontSize: 15, fontFamily: "monospace", fontWeight: 600, letterSpacing: 1, color: "#6ab3f3" }}>
+                                        {group}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <button onClick={() => setSafetyNumbers(null)} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {debugOpen && (
                 <div style={{ background: "#0d1620", padding: "6px 10px", fontSize: 10, fontFamily: "monospace", color: "#8aa3bd", maxHeight: 140, overflowY: "auto", borderBottom: "1px solid #2a3a4a" }}>
