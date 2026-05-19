@@ -1,7 +1,24 @@
 import React, { useEffect, useRef, useState } from "react"
 import { List, Cell, Avatar, Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
-import { saveContact, getContacts, getContactName } from "../contacts"
+import { saveContact, getContacts, getContactName, removeContact } from "../contacts"
+import { clearMessages } from "../messageStore"
+
+function DeleteButton({ id, deleteTarget, setDeleteTarget, onDelete }) {
+    if (deleteTarget === id) {
+        return (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
+                <button onClick={() => onDelete(id)} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Delete</button>
+                <button onClick={() => setDeleteTarget(null)} style={{ background: "none", border: "none", color: "#708499", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+        )
+    }
+    return (
+        <button onClick={e => { e.stopPropagation(); setDeleteTarget(id) }} style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" /></svg>
+        </button>
+    )
+}
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -27,6 +44,15 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
     const [submitting, setSubmitting] = useState(false)
     const [newChatError, setNewChatError] = useState("")
     const [settingsOpen, setSettingsOpen] = useState(false)
+    const [deleteTarget, setDeleteTarget] = useState(null)
+
+    function handleDeleteChat(id) {
+        clearMessages(id)
+        removeContact(id)
+        setInboxContacts(prev => prev.filter(m => m.sender_id !== id))
+        setSavedContacts(prev => prev.filter(c => c.id !== id))
+        setDeleteTarget(null)
+    }
     const settingsRef = useRef(null)
 
     useEffect(() => {
@@ -121,12 +147,14 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                     <List>
                         {inboxContacts.map(msg => {
                             const displayName = msg.sender_username ? `@${msg.sender_username}` : getContactName(msg.sender_id)
+                            const id = msg.sender_id
                             return (
                                 <Cell
-                                    key={msg.sender_id}
+                                    key={id}
                                     before={<Avatar>{displayName.replace(/^@/, "").slice(0, 2).toUpperCase()}</Avatar>}
                                     subtitle={new Date(msg.timestamp).toLocaleString()}
-                                    onClick={() => onOpenChat({ id: msg.sender_id, name: displayName })}
+                                    after={<DeleteButton id={id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />}
+                                    onClick={() => deleteTarget === id ? null : onOpenChat({ id, name: displayName })}
                                 >
                                     {displayName}
                                 </Cell>
@@ -137,7 +165,8 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                                 key={contact.id}
                                 before={<Avatar>{String(contact.name).replace(/^@/, "").slice(0, 2).toUpperCase()}</Avatar>}
                                 subtitle="No messages yet"
-                                onClick={() => onOpenChat({ id: contact.id, name: contact.name })}
+                                after={<DeleteButton id={contact.id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />}
+                                onClick={() => deleteTarget === contact.id ? null : onOpenChat({ id: contact.id, name: contact.name })}
                             >
                                 {contact.name}
                             </Cell>
