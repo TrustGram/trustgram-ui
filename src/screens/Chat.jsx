@@ -3,7 +3,7 @@ import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession, computeFingerprint } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
-import { appendOTKsToIdentity } from "../storage"
+import { appendOTKsToIdentity, consumeOTK } from "../storage"
 import { removeContact } from "../contacts"
 
 const EMOJI_SET = [
@@ -93,8 +93,10 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
                 })
             )
-            await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
+            // Store private keys BEFORE uploading to server — if app closes between the two,
+            // we'd rather have orphaned server keys than unrecoverable server-side OTKs.
             await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
+            await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
             localStorage.setItem(OTK_THRESHOLD_KEY, String(OTK_BATCH))
             if (onIdentityRefresh) await onIdentityRefresh()
         } catch {}
@@ -143,6 +145,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 const { plaintext } = await decryptMessage(sessionState, payload.message)
                 decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                 pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
+                if (payload.senderInfo.oneTimePreKeyId) {
+                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                }
                 await deleteMessage(msg.id, initData).catch(e => pushDebug(`del fail #${msg.id}: ${e.message?.slice(0, 30)}`))
                 maybeRefillOTKs().catch(() => {})
             } catch (err) {

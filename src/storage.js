@@ -76,3 +76,17 @@ export async function appendOTKsToIdentity(newPairs) {
     identity.oneTimePreKeys = [...identity.oneTimePreKeys, ...newPairs]
     await idbPut(db, "identity", identity)
 }
+
+export async function consumeOTK(usedPublicKeyB64) {
+    const db = await openDB()
+    const identity = await idbGet(db, "identity")
+    if (!identity) return
+    const filtered = []
+    for (const kp of identity.oneTimePreKeys) {
+        const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
+        const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+        if (pub !== usedPublicKeyB64) filtered.push(kp)
+    }
+    identity.oneTimePreKeys = filtered
+    await idbPut(db, "identity", identity)
+}
