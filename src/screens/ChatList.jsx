@@ -49,7 +49,19 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
     const [deleteTarget, setDeleteTarget] = useState(null)
     const [chatExport, setChatExport] = useState(null) // null | { state, id, code, name, error }
     const [exportCopied, setExportCopied] = useState(false)
+    const [verifyOpen, setVerifyOpen] = useState(false)
     const settingsRef = useRef(null)
+
+    const commitHash = typeof __COMMIT_HASH__ !== "undefined" ? __COMMIT_HASH__ : "unknown"
+    const buildTime = typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : null
+    const repoUrl = import.meta.env.VITE_REPO_URL || null
+    const cryptoRepoUrl = import.meta.env.VITE_CRYPTO_REPO_URL || null
+    const commitUrl = repoUrl ? `${repoUrl}/commit/${commitHash}` : null
+
+    function openExternal(url) {
+        if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url)
+        else window.open(url, "_blank", "noreferrer")
+    }
 
     function handleDeleteChat(id) {
         clearMessages(id)
@@ -194,6 +206,64 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                 </div>
             )}
 
+            {verifyOpen && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={() => setVerifyOpen(false)}>
+                    <div style={{ background: "#1f2b38", borderRadius: 16, padding: "28px 24px", maxWidth: 340, width: "100%", textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                        <div style={{ fontSize: 30, marginBottom: 8 }}>🔍</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6, color: "#e8f0f7" }}>Verify build</div>
+                        <div style={{ fontSize: 13, color: "#708499", marginBottom: 20, lineHeight: 1.6 }}>
+                            Убедись, что в браузере работает именно тот код, который опубликован на GitHub.
+                        </div>
+
+                        <div style={{ background: "#17212b", borderRadius: 10, padding: "12px 14px", marginBottom: 16, textAlign: "left" }}>
+                            <div style={{ fontSize: 11, color: "#708499", marginBottom: 4, letterSpacing: 1 }}>COMMIT</div>
+                            {commitUrl ? (
+                                <a href={commitUrl} target="_blank" rel="noreferrer"
+                                    style={{ fontFamily: "monospace", fontSize: 13, color: "#6ab3f3", wordBreak: "break-all", textDecoration: "none", borderBottom: "1px dotted rgba(106,179,243,0.4)" }}>
+                                    {commitHash.slice(0, 16)}…
+                                </a>
+                            ) : (
+                                <span style={{ fontFamily: "monospace", fontSize: 13, color: "#6ab3f3", wordBreak: "break-all" }}>
+                                    {commitHash.slice(0, 40)}
+                                </span>
+                            )}
+                            {buildTime && (
+                                <div style={{ fontSize: 11, color: "#708499", marginTop: 6 }}>
+                                    Built {new Date(buildTime).toLocaleString()}
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ background: "#17212b", borderRadius: 10, padding: "12px 14px", marginBottom: 20, textAlign: "left" }}>
+                            <div style={{ fontSize: 11, color: "#708499", marginBottom: 8, letterSpacing: 1 }}>КАК ПРОВЕРИТЬ</div>
+                            {[
+                                "Склонируй репозиторий и переключись на этот коммит",
+                                "Собери: npm install && npm run build",
+                                "Сравни dist/index.html (SRI-хеши ассетов) с задеплоенной версией",
+                            ].map((step, i) => (
+                                <div key={i} style={{ display: "flex", gap: 8, marginBottom: i < 2 ? 8 : 0, alignItems: "flex-start" }}>
+                                    <span style={{ color: "#6ab3f3", fontWeight: 700, fontSize: 12, flexShrink: 0, marginTop: 1 }}>{i + 1}.</span>
+                                    <span style={{ fontSize: 12, color: "#a0b8cc", lineHeight: 1.5 }}>{step}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {repoUrl && (
+                            <a href={repoUrl} target="_blank" rel="noreferrer"
+                                style={{ display: "inline-block", marginBottom: 16, fontSize: 13, color: "#6ab3f3", textDecoration: "none" }}>
+                                Открыть репозиторий →
+                            </a>
+                        )}
+
+                        <div>
+                            <button onClick={() => setVerifyOpen(false)} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                                Закрыть
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {chatExport?.state === "error" && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
                     <div style={{ background: "#1f2b38", borderRadius: 16, padding: "24px", maxWidth: 300, width: "100%", textAlign: "center" }}>
@@ -230,6 +300,14 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                             <button onClick={() => { setSettingsOpen(false); onExport() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
                                 Backup all chats
                             </button>
+                            <button onClick={() => { setSettingsOpen(false); setVerifyOpen(true) }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                Verify build
+                            </button>
+                            {cryptoRepoUrl && (
+                                <button onClick={() => { setSettingsOpen(false); openExternal(cryptoRepoUrl + "/blob/dev/src/index.ts") }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                    Encryption source code ↗
+                                </button>
+                            )}
                             <button onClick={() => { setSettingsOpen(false); onResetKeys() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 14, textAlign: "left" }}>
                                 Reset keys
                             </button>
