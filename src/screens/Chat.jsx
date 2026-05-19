@@ -14,9 +14,13 @@ function parseTs(ts) {
     return isNaN(d) ? 0 : d.getTime()
 }
 
+function dedupKey(m) {
+    return `${m.id}|${m.timestamp}`
+}
+
 function mergeDedupe(a, b) {
-    const seen = new Set(a.map(m => m.id))
-    const novel = b.filter(m => !seen.has(m.id))
+    const seen = new Set(a.map(dedupKey))
+    const novel = b.filter(m => !seen.has(dedupKey(m)))
     return [...a, ...novel].sort((x, y) => parseTs(x.timestamp) - parseTs(y.timestamp))
 }
 
@@ -224,7 +228,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     <Placeholder description="No messages yet. Say hello!" />
                 ) : (
                     messages.map(msg => (
-                        <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: msg.from === "me" ? "flex-end" : "flex-start" }}>
+                        <div key={dedupKey(msg)} style={{ display: "flex", flexDirection: "column", alignItems: msg.from === "me" ? "flex-end" : "flex-start" }}>
                             <div style={{
                                 background: msg.from === "me" ? "#2b5278" : "#1f2b38",
                                 borderRadius: msg.from === "me" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
