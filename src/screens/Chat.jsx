@@ -26,12 +26,17 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const [loading, setLoading] = useState(true)
     const [sending, setSending] = useState(false)
     const [error, setError] = useState(null)
+    const [debugLog, setDebugLog] = useState([])
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
     const messagesRef = useRef([])
     const identityRef = useRef(identity)
     const refillInProgress = useRef(false)
     const initData = getInitData()
+
+    function pushDebug(line) {
+        setDebugLog(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()} ${line}`])
+    }
 
     useEffect(() => { identityRef.current = identity }, [identity])
 
@@ -86,9 +91,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     async function decryptInboxMessages(msgs) {
         const mine = msgs.filter(m => m.sender_id === contactId)
+        if (msgs.length > 0) pushDebug(`inbox: ${msgs.length} msg, mine: ${mine.length}`)
         const decrypted = []
 
         for (const msg of mine) {
+            const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 8) ?? "null" } catch { return "?" } })()
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
 
@@ -105,12 +112,13 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 )
                 const { plaintext } = await decryptMessage(sessionState, payload.message)
                 decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
-                await deleteMessage(msg.id, initData)
+                pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
+                await deleteMessage(msg.id, initData).catch(e => pushDebug(`del fail #${msg.id}: ${e.message?.slice(0, 30)}`))
                 maybeRefillOTKs().catch(() => {})
             } catch (err) {
-                const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 12) ?? "null" } catch { return "?" } })()
                 console.error("[TrustGram] decrypt failed for msg", msg.id, "otk:", otkSnippet, err?.message, err)
-                decrypted.push({ id: msg.id, from: "them", text: "🔒 [не удалось расшифровать]", timestamp: msg.timestamp })
+                pushDebug(`✗ decrypt #${msg.id} otk:${otkSnippet} err:${err?.message?.slice(0, 40)}`)
+                decrypted.push({ id: msg.id, from: "them", text: `🔒 [не удалось расшифровать: ${err?.message?.slice(0, 50) ?? "?"}]`, timestamp: msg.timestamp })
                 await deleteMessage(msg.id, initData).catch(() => {})
             }
         }
@@ -162,15 +170,19 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             updateMessages(optimistic)
 
             const bundle = await fetchBundle(contactId, initData)
+            const otkPub = bundle.one_time_key?.public_key
+            pushDebug(`→ send otk:${otkPub?.slice(0, 8) ?? "null"}`)
             const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
                 identityKey: bundle.identity_key,
                 signedPreKey: bundle.signed_pre_key,
-                oneTimePreKey: bundle.one_time_key?.public_key ?? null,
+                oneTimePreKey: otkPub ?? null,
             })
             const { message } = await encryptMessage(sessionState, text)
             await sendMessage(contactId, JSON.stringify({ type: "message", senderInfo, message }), initData)
+            pushDebug(`→ send ok`)
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
+            pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
             setError(e.message)
         } finally {
             setSending(false)
@@ -183,6 +195,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     const displayName = contactName ?? String(contactId)
     const initials = displayName.replace(/^@/, "").slice(0, 2).toUpperCase()
+    const [debugOpen, setDebugOpen] = useState(false)
 
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
@@ -194,9 +207,15 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
-                    <div style={{ fontSize: 11, color: "#6ab3f3" }}>🔒 End-to-end encrypted</div>
+                    <div style={{ fontSize: 11, color: "#6ab3f3", cursor: "pointer" }} onClick={() => setDebugOpen(o => !o)}>🔒 End-to-end encrypted{debugLog.length > 0 ? ` · ${debugLog.length}` : ""}</div>
                 </div>
             </div>
+
+            {debugOpen && (
+                <div style={{ background: "#0d1620", padding: "6px 10px", fontSize: 10, fontFamily: "monospace", color: "#8aa3bd", maxHeight: 140, overflowY: "auto", borderBottom: "1px solid #2a3a4a" }}>
+                    {debugLog.length === 0 ? <div>no events yet</div> : debugLog.map((line, i) => <div key={i}>{line}</div>)}
+                </div>
+            )}
 
             <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
                 {loading ? (
