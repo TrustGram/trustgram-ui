@@ -1,7 +1,11 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
 html, body, #root {
     height: 100%;
     margin: 0;
     background-color: #17212b;
-    color: #ffffff;
+    color: #e8f0f7;
     color-scheme: dark;
+    font-family: 'Plus Jakarta Sans', -apple-system, 'SF Pro Text', 'Segoe UI Variable', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
 }

@@ -157,6 +157,15 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
 
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
+            <style>{`
+                .chat-row { transition: background 0.12s; }
+                .chat-row:hover { background: rgba(43,82,120,0.12) !important; }
+                .chat-row:active { background: rgba(43,82,120,0.22) !important; }
+                .contact-row { transition: background 0.1s; }
+                .contact-row:hover { background: rgba(43,82,120,0.18) !important; }
+                .icon-btn { transition: color 0.12s, opacity 0.12s; }
+                .icon-btn:hover { color: #6ab3f3 !important; opacity: 1 !important; }
+            `}</style>
 
             {/* Backup code modal */}
             {chatExport?.state === "done" && (
@@ -194,8 +203,8 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                 </div>
             )}
 
-            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1f2b38", borderBottom: "1px solid #2a3a4a" }}>
-                <span style={{ fontSize: 20, fontWeight: 600 }}>TrustGram</span>
+            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1f2b38", borderBottom: "1px solid rgba(42,58,74,0.8)", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", zIndex: 2, position: "relative" }}>
+                <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.3px", color: "#e8f0f7" }}>TrustGram</span>
                 <div ref={settingsRef} style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
                     <Button size="s" onClick={() => { setNewChatError(""); setNewChatOpen(true) }}>New chat</Button>
                     <button onClick={() => setSettingsOpen(o => !o)} style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}>
@@ -247,16 +256,16 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                         })),
                         ...extraSaved.map(c => ({ id: c.id, name: c.name, subtitle: "No messages yet" })),
                     ].map(({ id, name, subtitle }) => (
-                        <div key={id} style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid #1a2536", gap: 8 }}>
+                        <div key={id} className="chat-row" style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid rgba(26,37,54,0.8)", gap: 8 }}>
                             <div
                                 onClick={() => onOpenChat({ id, name })}
                                 style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, cursor: "pointer" }}
                             >
-                                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0 }}>
+                                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg, #2b5278 0%, #1a3a5c 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.08)" }}>
                                     {String(name).replace(/^@/, "").slice(0, 2).toUpperCase()}
                                 </div>
                                 <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                                    <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#e8f0f7" }}>{name}</div>
                                     <div style={{ fontSize: 12, color: "#708499", marginTop: 2 }}>{subtitle}</div>
                                 </div>
                             </div>
@@ -264,7 +273,8 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                                 onClick={e => { e.stopPropagation(); handleExportChat(id, name) }}
                                 disabled={chatExport?.state === "loading"}
                                 title="Export this chat"
-                                style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center", flexShrink: 0 }}
+                                className="icon-btn"
+                                style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center", flexShrink: 0, opacity: 0.7 }}
                             >
                                 {chatExport?.state === "loading" && chatExport?.id === id
                                     ? <Spinner size="s" />
@@ -277,10 +287,10 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                 </div>
             )}
 
-            <div style={{ padding: "10px 16px", borderTop: "1px solid #2a3a4a", background: "#1f2b38", flexShrink: 0, display: "flex", justifyContent: "center" }}>
+            <div style={{ padding: "10px 16px", borderTop: "1px solid rgba(42,58,74,0.7)", background: "#1f2b38", flexShrink: 0, display: "flex", justifyContent: "center" }}>
                 <button
                     onClick={onImport}
-                    style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#2b5278", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+                    style={{ padding: "7px 18px", borderRadius: 20, border: "none", background: "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 2px 8px rgba(0,0,0,0.25)" }}
                 >
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Import
@@ -309,6 +319,7 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                                 {filteredContacts.map((c, i) => (
                                     <div
                                         key={c.id}
+                                        className="contact-row"
                                         onClick={() => {
                                             onOpenChat({ id: c.id, name: c.name })
                                             setNewChatOpen(false)
@@ -318,13 +329,13 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                                         style={{
                                             display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
                                             cursor: "pointer", background: "#17212b",
-                                            borderBottom: i < filteredContacts.length - 1 ? "1px solid #1a2536" : "none",
+                                            borderBottom: i < filteredContacts.length - 1 ? "1px solid rgba(26,37,54,0.8)" : "none",
                                         }}
                                     >
-                                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg, #2b5278 0%, #1a3a5c 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.25)" }}>
                                             {String(c.name).replace(/^@/, "").slice(0, 2).toUpperCase()}
                                         </div>
-                                        <span style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                                        <span style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#e8f0f7" }}>{c.name}</span>
                                     </div>
                                 ))}
                             </div>

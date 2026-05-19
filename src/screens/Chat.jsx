@@ -250,12 +250,17 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
+            <style>{`
+                .chat-send-btn { transition: background 0.15s, box-shadow 0.15s !important; }
+                .chat-send-btn.active:not(:disabled) { box-shadow: 0 0 0 3px rgba(106,179,243,0.22), 0 4px 12px rgba(43,82,120,0.5) !important; }
+                .chat-msg-in { transition: background 0.1s; }
+            `}</style>
 
-            <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, background: "#1f2b38", borderBottom: "1px solid #2a3a4a", flexShrink: 0 }}>
+            <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, background: "#1f2b38", borderBottom: "1px solid rgba(42,58,74,0.8)", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", flexShrink: 0, zIndex: 2 }}>
                 <button onClick={onBack} style={{ background: "none", border: "none", color: "#6ab3f3", cursor: "pointer", padding: "4px", lineHeight: 1, display: "flex", alignItems: "center" }}>
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
                 </button>
-                <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>
+                <div style={{ width: 38, height: 38, borderRadius: "50%", background: "linear-gradient(135deg, #2b5278 0%, #1a3a5c 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.08)" }}>
                     {initials}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -335,9 +340,16 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     messages.map(msg => (
                         <div key={dedupKey(msg)} style={{ display: "flex", flexDirection: "column", alignItems: msg.from === "me" ? "flex-end" : "flex-start" }}>
                             <div style={{
-                                background: msg.from === "me" ? "#2b5278" : "#1f2b38",
+                                background: msg.from === "me"
+                                    ? "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)"
+                                    : "#1f2b38",
+                                border: msg.from === "me" ? "none" : "1px solid rgba(255,255,255,0.055)",
                                 borderRadius: msg.from === "me" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                                padding: "9px 13px", maxWidth: "78%", fontSize: 14, lineHeight: 1.45, wordBreak: "break-word",
+                                padding: "9px 13px", maxWidth: "78%", fontSize: 14, lineHeight: 1.5,
+                                wordBreak: "break-word", color: "#e8f0f7",
+                                boxShadow: msg.from === "me"
+                                    ? "0 2px 8px rgba(0,0,0,0.25)"
+                                    : "0 1px 4px rgba(0,0,0,0.2)",
                             }}>
                                 {msg.text}
                             </div>
@@ -352,8 +364,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
             {error && <div style={{ padding: "4px 16px", color: "#ff6b6b", fontSize: 12, background: "#1f2b38" }}>{error}</div>}
 
-            <div style={{ padding: "8px 10px 12px", background: "#1f2b38", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
-                <div style={{ flex: 1, background: "#17212b", borderRadius: 22, padding: "10px 16px", display: "flex", alignItems: "center" }}>
+            <div style={{ padding: "8px 10px 12px", background: "#1f2b38", borderTop: "1px solid rgba(42,58,74,0.7)", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                <div style={{ flex: 1, background: "#17212b", borderRadius: 22, padding: "10px 16px", display: "flex", alignItems: "center", border: "1px solid rgba(255,255,255,0.055)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.2)" }}>
                     <input
                         ref={inputRef}
                         type="text"
@@ -362,18 +374,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                         onChange={e => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         disabled={sending}
-                        style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#fff", fontSize: 15, fontFamily: "inherit" }}
+                        style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#e8f0f7", fontSize: 15, fontFamily: "inherit" }}
                     />
                 </div>
                 <button
                     onClick={handleSend}
                     disabled={sending || !input.trim()}
+                    className={`chat-send-btn${input.trim() ? " active" : ""}`}
                     style={{
                         width: 44, height: 44, borderRadius: "50%", border: "none", flexShrink: 0,
-                        background: input.trim() ? "#2b5278" : "#2a3a4a",
+                        background: input.trim() ? "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)" : "#2a3a4a",
                         color: "#fff", cursor: input.trim() ? "pointer" : "default",
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        transition: "background 0.15s",
                     }}
                 >
                     {sending
