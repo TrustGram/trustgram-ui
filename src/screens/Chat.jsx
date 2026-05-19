@@ -4,7 +4,6 @@ import { initiateSession, encryptMessage, decryptMessage, acceptSession, compute
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity, consumeOTK } from "../storage"
-import { removeContact } from "../contacts"
 
 const EMOJI_SET = [
     "🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐒",
@@ -230,7 +229,6 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     async function handleDeleteChat() {
         clearMessages(contactId)
-        removeContact(contactId)
         onBack()
     }
 
@@ -269,8 +267,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 </button>
                 {deleteConfirm ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 12, color: "#ff6b6b" }}>Delete chat?</span>
-                        <button onClick={handleDeleteChat} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Delete</button>
+                        <span style={{ fontSize: 12, color: "#ff6b6b" }}>Clear history?</span>
+                        <button onClick={handleDeleteChat} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Clear</button>
                         <button onClick={() => setDeleteConfirm(false)} style={{ background: "none", border: "none", color: "#708499", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
                     </div>
                 ) : (

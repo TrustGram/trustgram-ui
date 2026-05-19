@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundle, fetchBundleByUsername } from "../api"
-import { saveContact, getContacts, getContactName, removeContact } from "../contacts"
+import { saveContact, getContacts, getContactName } from "../contacts"
 import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
 
@@ -9,7 +9,7 @@ function DeleteButton({ id, deleteTarget, setDeleteTarget, onDelete }) {
     if (deleteTarget === id) {
         return (
             <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
-                <button onClick={() => onDelete(id)} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Delete</button>
+                <button onClick={() => onDelete(id)} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Clear</button>
                 <button onClick={() => setDeleteTarget(null)} style={{ background: "none", border: "none", color: "#708499", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
         )
@@ -49,9 +49,6 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
 
     function handleDeleteChat(id) {
         clearMessages(id)
-        removeContact(id)
-        setInboxContacts(prev => prev.filter(m => m.sender_id !== id))
-        setSavedContacts(prev => prev.filter(c => c.id !== id))
         setDeleteTarget(null)
     }
     const settingsRef = useRef(null)
