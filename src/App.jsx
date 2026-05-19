@@ -5,6 +5,7 @@ import ChatList from "./screens/ChatList"
 import Chat from "./screens/Chat"
 import PinLock from "./screens/PinLock"
 import PinSetup from "./screens/PinSetup"
+import ExportImport from "./screens/ExportImport"
 import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey } from "./storage"
 import { clearAllMessages } from "./messageStore"
 import { clearContacts } from "./contacts"
@@ -17,6 +18,7 @@ export default function App() {
     const [activeChat, setActiveChat] = useState(null)
     const [locked, setLocked] = useState(false)
     const [pinScreen, setPinScreen] = useState(null) // null | "setup" | "change" | "disable"
+    const [exportOpen, setExportOpen] = useState(false)
     const lastActivityRef = useRef(Date.now())
 
     useEffect(() => {
@@ -99,6 +101,10 @@ export default function App() {
         )
     }
 
+    if (exportOpen) {
+        return <ExportImport storageKey={storageKey} onBack={() => setExportOpen(false)} />
+    }
+
     if (activeChat) {
         return (
             <Chat
@@ -117,6 +123,7 @@ export default function App() {
             onOpenChat={setActiveChat}
             onResetKeys={handleResetKeys}
             onPinSettings={mode => setPinScreen(mode)}
+            onExport={() => setExportOpen(true)}
         />
     )
 }

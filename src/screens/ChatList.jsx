@@ -36,7 +36,7 @@ function groupByContact(messages) {
     return Array.from(map.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 }
 
-export default function ChatList({ onOpenChat, onResetKeys, onPinSettings }) {
+export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExport }) {
     const [inboxContacts, setInboxContacts] = useState([])
     const [savedContacts, setSavedContacts] = useState(() => getContacts())
     const [loading, setLoading] = useState(true)
@@ -144,6 +144,9 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings }) {
                                     </button>
                                 </>
                             )}
+                            <button onClick={() => { setSettingsOpen(false); onExport() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                Backup &amp; Restore
+                            </button>
                             <button onClick={() => { setSettingsOpen(false); onResetKeys() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 14, textAlign: "left" }}>
                                 Reset keys
                             </button>
