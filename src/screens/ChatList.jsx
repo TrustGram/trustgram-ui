@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
-import { fetchInbox, fetchBundleByUsername } from "../api"
+import { fetchInbox, fetchBundle, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName, removeContact } from "../contacts"
 import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
@@ -96,10 +96,11 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
             if (isUsername) {
                 const bundle = await fetchBundleByUsername(input, initData)
                 contactId = bundle.telegram_id
-                contactName = `@${input.replace(/^@/, "")}`
+                contactName = bundle.telegram_username ? `@${bundle.telegram_username}` : `@${input.replace(/^@/, "")}`
             } else {
                 contactId = parseInt(input, 10)
-                contactName = getContactName(contactId)
+                const bundle = await fetchBundle(String(contactId), initData)
+                contactName = bundle.telegram_username ? `@${bundle.telegram_username}` : getContactName(contactId)
             }
 
             saveContact(contactId, contactName)
