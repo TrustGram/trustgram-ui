@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react"
-import { List, Cell, Avatar, Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
+import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName, removeContact } from "../contacts"
 import { clearMessages } from "../messageStore"
@@ -144,34 +144,30 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                 <Placeholder header="No chats yet" description="Start a new conversation by pressing 'New chat'" />
             ) : (
                 <div style={{ flex: 1, overflowY: "auto" }}>
-                    <List>
-                        {inboxContacts.map(msg => {
-                            const displayName = msg.sender_username ? `@${msg.sender_username}` : getContactName(msg.sender_id)
-                            const id = msg.sender_id
-                            return (
-                                <Cell
-                                    key={id}
-                                    before={<Avatar>{displayName.replace(/^@/, "").slice(0, 2).toUpperCase()}</Avatar>}
-                                    subtitle={new Date(msg.timestamp).toLocaleString()}
-                                    after={<DeleteButton id={id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />}
-                                    onClick={() => deleteTarget === id ? null : onOpenChat({ id, name: displayName })}
-                                >
-                                    {displayName}
-                                </Cell>
-                            )
-                        })}
-                        {extraSaved.map(contact => (
-                            <Cell
-                                key={contact.id}
-                                before={<Avatar>{String(contact.name).replace(/^@/, "").slice(0, 2).toUpperCase()}</Avatar>}
-                                subtitle="No messages yet"
-                                after={<DeleteButton id={contact.id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />}
-                                onClick={() => deleteTarget === contact.id ? null : onOpenChat({ id: contact.id, name: contact.name })}
+                    {[
+                        ...inboxContacts.map(msg => ({
+                            id: msg.sender_id,
+                            name: msg.sender_username ? `@${msg.sender_username}` : getContactName(msg.sender_id),
+                            subtitle: new Date(msg.timestamp).toLocaleString(),
+                        })),
+                        ...extraSaved.map(c => ({ id: c.id, name: c.name, subtitle: "No messages yet" })),
+                    ].map(({ id, name, subtitle }) => (
+                        <div key={id} style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid #1a2536", gap: 12 }}>
+                            <div
+                                onClick={() => onOpenChat({ id, name })}
+                                style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, cursor: "pointer" }}
                             >
-                                {contact.name}
-                            </Cell>
-                        ))}
-                    </List>
+                                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0 }}>
+                                    {String(name).replace(/^@/, "").slice(0, 2).toUpperCase()}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                                    <div style={{ fontSize: 12, color: "#708499", marginTop: 2 }}>{subtitle}</div>
+                                </div>
+                            </div>
+                            <DeleteButton id={id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />
+                        </div>
+                    ))}
                 </div>
             )}
 
