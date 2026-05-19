@@ -144,6 +144,17 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
     const extraSaved = savedContacts.filter(c => !inboxIds.has(c.id))
     const isEmpty = inboxContacts.length === 0 && extraSaved.length === 0
 
+    const allContactsForSearch = [
+        ...savedContacts,
+        ...inboxContacts
+            .filter(m => !savedContacts.some(c => c.id === m.sender_id))
+            .map(m => ({ id: m.sender_id, name: m.sender_username ? `@${m.sender_username}` : getContactName(m.sender_id) }))
+    ]
+    const searchQuery = recipientInput.trim().toLowerCase()
+    const filteredContacts = searchQuery
+        ? allContactsForSearch.filter(c => c.name.toLowerCase().includes(searchQuery))
+        : allContactsForSearch
+
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
 
@@ -276,23 +287,63 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                 </button>
             </div>
 
-            <Modal open={newChatOpen} onOpenChange={setNewChatOpen} header={<Modal.Header>New chat</Modal.Header>}>
-                <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-                    <p style={{ margin: 0, color: "#708499", fontSize: 13 }}>
-                        Enter a Telegram username or ID. They must have TrustGram open at least once.
-                    </p>
+            <Modal
+                open={newChatOpen}
+                onOpenChange={v => { setNewChatOpen(v); if (!v) { setRecipientInput(""); setNewChatError("") } }}
+                header={<Modal.Header>New chat</Modal.Header>}
+            >
+                <div style={{ padding: "12px 16px 24px", display: "flex", flexDirection: "column", gap: 10 }}>
                     <input
                         type="text"
-                        placeholder="@username or Telegram ID"
+                        placeholder="Search or enter @username / ID"
                         value={recipientInput}
-                        onChange={e => setRecipientInput(e.target.value)}
-                        onKeyDown={e => e.key === "Enter" && handleNewChat()}
-                        style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #444", background: "#1a1a1a", color: "#fff", fontSize: 16, boxSizing: "border-box" }}
+                        onChange={e => { setRecipientInput(e.target.value); setNewChatError("") }}
+                        onKeyDown={e => e.key === "Enter" && recipientInput.trim() && handleNewChat()}
+                        autoFocus
+                        style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #2a3a4a", background: "#17212b", color: "#fff", fontSize: 15, boxSizing: "border-box", outline: "none" }}
                     />
+
+                    {filteredContacts.length > 0 && (
+                        <div style={{ borderRadius: 8, border: "1px solid #2a3a4a", overflow: "hidden" }}>
+                            <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                                {filteredContacts.map((c, i) => (
+                                    <div
+                                        key={c.id}
+                                        onClick={() => {
+                                            onOpenChat({ id: c.id, name: c.name })
+                                            setNewChatOpen(false)
+                                            setRecipientInput("")
+                                            setNewChatError("")
+                                        }}
+                                        style={{
+                                            display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                                            cursor: "pointer", background: "#17212b",
+                                            borderBottom: i < filteredContacts.length - 1 ? "1px solid #1a2536" : "none",
+                                        }}
+                                    >
+                                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                                            {String(c.name).replace(/^@/, "").slice(0, 2).toUpperCase()}
+                                        </div>
+                                        <span style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {searchQuery && filteredContacts.length === 0 && (
+                        <div style={{ fontSize: 13, color: "#708499", textAlign: "center", padding: "4px 0" }}>
+                            No saved contacts match
+                        </div>
+                    )}
+
                     {newChatError && <p style={{ margin: 0, color: "#ff6b6b", fontSize: 13 }}>{newChatError}</p>}
-                    <Button onClick={handleNewChat} disabled={submitting}>
-                        {submitting ? <Spinner size="s" /> : "Open chat"}
-                    </Button>
+
+                    {recipientInput.trim() && (
+                        <Button onClick={handleNewChat} disabled={submitting}>
+                            {submitting ? <Spinner size="s" /> : "Open chat"}
+                        </Button>
+                    )}
                 </div>
             </Modal>
         </div>
