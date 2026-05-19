@@ -6,6 +6,29 @@ import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity } from "../storage"
 import { removeContact } from "../contacts"
 
+const EMOJI_SET = [
+    "🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐒",
+    "🦆","🦅","🦉","🦇","🐝","🐛","🦋","🐌","🐞","🐜","🦗","🐢","🐍","🦎","🐙","🦑",
+    "🦀","🐡","🐠","🐟","🐬","🐳","🦈","🐊","🐅","🐆","🦓","🦍","🐘","🦛","🦏","🐪",
+    "🦒","🐃","🐄","🐎","🐖","🐏","🐑","🐐","🦌","🐕","🐈","🐓","🦃","🦚","🦜","🦢",
+    "🕊","🐇","🦝","🦨","🦡","🦦","🦥","🐁","🐀","🐿","🦔","🌸","🌼","🌻","🌹","🌷",
+    "🌱","🌿","🍀","🍁","🍂","🍃","🍄","🌾","💐","🌵","🌴","🌳","🌲","🌺","🍎","🍐",
+    "🍊","🍋","🍌","🍉","🍇","🍓","🍒","🍑","🍍","🥥","🥝","🍅","🍆","🥑","🥦","🥬",
+    "🥒","🌶","🧄","🧅","🥕","🌽","🥔","🍠","🧀","🥚","🥞","🥓","🍗","🍖","🌭","🍔",
+    "🍟","🍕","🌮","🌯","🥙","🥗","🍿","🧂","🥫","🍱","🍘","🍣","🍤","🍜","🍝","🍛",
+    "🍲","🥘","🫕","🥣","🥗","🧆","🥚","🍳","🥐","🥯","🍞","🥖","🧇","🥞","🧈","☕",
+    "🍵","🧃","🥤","🧋","🍺","🍷","🥂","🍸","🍹","🧉","⚽","🏀","🏈","⚾","🎾","🏐",
+    "🏉","🎱","🏓","🏸","🥊","🎯","🎳","🏹","🎣","🤿","🎿","🛷","🎮","🕹","🎲","♟",
+    "🎭","🎨","🎬","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🪕","🎻","🌍","🌙","⭐",
+    "☀","🌤","⛅","🌧","⛈","🌩","🌨","❄","🌊","🌈","🌪","⚡","🔥","💧","🌊","🍀",
+    "🌙","✨","💫","⚡","🔑","🗝","🔐","🔒","🔓","🚪","🧲","💡","🔦","🕯","🪔","🔮",
+    "🧿","🪬","🎁","🎈","🎉","🎊","🎀","🎗","🏆","🥇","🥈","🥉","🏅","🎖","🌟","💎",
+]
+
+function hexToEmoji(hex) {
+    return hex.match(/.{2}/g).slice(0, 8).map(b => EMOJI_SET[parseInt(b, 16)])
+}
+
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
 }
@@ -207,11 +230,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     }
 
     async function handleShowSafetyNumbers() {
-        setSafetyNumbers({ display: null, loading: true })
+        setSafetyNumbers({ display: null, hex: null, loading: true, showHex: false })
         try {
             const bundle = await fetchBundle(contactId, initData)
-            const { display } = await computeFingerprint(identityRef.current, bundle.identity_key)
-            setSafetyNumbers({ display, loading: false })
+            const { hex, display } = await computeFingerprint(identityRef.current, bundle.identity_key)
+            setSafetyNumbers({ hex, display, loading: false, showHex: false })
         } catch (e) {
             setSafetyNumbers(null)
             setError(e.message)
@@ -252,28 +275,44 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 )}
             </div>
 
-            {safetyNumbers !== null && (
+                {safetyNumbers !== null && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={() => setSafetyNumbers(null)}>
                     <div style={{ background: "#1f2b38", borderRadius: 16, padding: "28px 24px", maxWidth: 340, width: "100%", textAlign: "center" }} onClick={e => e.stopPropagation()}>
                         <div style={{ fontSize: 32, marginBottom: 8 }}>🛡️</div>
                         <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>Safety Numbers</div>
                         <div style={{ fontSize: 13, color: "#708499", marginBottom: 20, lineHeight: 1.5 }}>
-                            Compare these numbers with <b style={{ color: "#a0b8cc" }}>{displayName}</b> via another channel. If they match — your connection is secure.
+                            Compare with <b style={{ color: "#a0b8cc" }}>{displayName}</b> via another channel. If they match — your connection is secure.
                         </div>
                         {safetyNumbers.loading ? (
                             <div style={{ display: "flex", justifyContent: "center", padding: 16 }}><Spinner size="m" /></div>
-                        ) : (
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 20 }}>
+                        ) : safetyNumbers.showHex ? (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
                                 {safetyNumbers.display.split(" ").map((group, i) => (
-                                    <div key={i} style={{ background: "#17212b", borderRadius: 8, padding: "10px 4px", fontSize: 15, fontFamily: "monospace", fontWeight: 600, letterSpacing: 1, color: "#6ab3f3" }}>
+                                    <div key={i} style={{ background: "#17212b", borderRadius: 8, padding: "10px 4px", fontSize: 14, fontFamily: "monospace", fontWeight: 600, letterSpacing: 1, color: "#6ab3f3" }}>
                                         {group}
                                     </div>
                                 ))}
                             </div>
+                        ) : (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+                                {hexToEmoji(safetyNumbers.hex).map((emoji, i) => (
+                                    <div key={i} style={{ background: "#17212b", borderRadius: 10, padding: "12px 4px", fontSize: 28, lineHeight: 1 }}>
+                                        {emoji}
+                                    </div>
+                                ))}
+                            </div>
                         )}
-                        <button onClick={() => setSafetyNumbers(null)} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
-                            Close
-                        </button>
+                        {!safetyNumbers.loading && (
+                            <button onClick={() => setSafetyNumbers(s => ({ ...s, showHex: !s.showHex }))}
+                                style={{ background: "none", border: "none", color: "#708499", fontSize: 13, cursor: "pointer", marginBottom: 16 }}>
+                                {safetyNumbers.showHex ? "Show as emoji" : "Show as numbers"}
+                            </button>
+                        )}
+                        <div>
+                            <button onClick={() => setSafetyNumbers(null)} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
+                                Close
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
