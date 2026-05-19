@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { List, Cell, Avatar, Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName } from "../contacts"
@@ -26,6 +26,16 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
     const [recipientInput, setRecipientInput] = useState("")
     const [submitting, setSubmitting] = useState(false)
     const [newChatError, setNewChatError] = useState("")
+    const [settingsOpen, setSettingsOpen] = useState(false)
+    const settingsRef = useRef(null)
+
+    useEffect(() => {
+        function handleClickOutside(e) {
+            if (settingsRef.current && !settingsRef.current.contains(e.target)) setSettingsOpen(false)
+        }
+        document.addEventListener("mousedown", handleClickOutside)
+        return () => document.removeEventListener("mousedown", handleClickOutside)
+    }, [])
 
     useEffect(() => {
         loadInbox()
@@ -85,9 +95,18 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
         <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: 20, fontWeight: 600 }}>TrustGram</span>
-                <div style={{ display: "flex", gap: 8 }}>
-                    <Button size="s" mode="outline" onClick={onResetKeys}>Reset keys</Button>
+                <div ref={settingsRef} style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
                     <Button size="s" onClick={() => { setNewChatError(""); setNewChatOpen(true) }}>New chat</Button>
+                    <button onClick={() => setSettingsOpen(o => !o)} style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}>
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></svg>
+                    </button>
+                    {settingsOpen && (
+                        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, background: "#1f2b38", border: "1px solid #2a3a4a", borderRadius: 8, zIndex: 10, minWidth: 140, boxShadow: "0 4px 12px rgba(0,0,0,0.4)" }}>
+                            <button onClick={() => { setSettingsOpen(false); onResetKeys() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 14, textAlign: "left" }}>
+                                Reset keys
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 

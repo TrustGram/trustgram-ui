@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { Button, Placeholder, Spinner } from "@telegram-apps/telegram-ui"
 import { createIdentity, getPublicBundle } from "../crypto"
 import { registerBundle } from "../api"
@@ -14,6 +14,8 @@ const STATUS = {
 export default function Setup({ onDone }) {
     const [status, setStatus] = useState(STATUS.IDLE)
     const [error, setError] = useState(null)
+
+    useEffect(() => { handleSetup() }, [])
 
     async function handleSetup() {
         try {

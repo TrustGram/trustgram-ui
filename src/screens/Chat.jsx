@@ -2,8 +2,9 @@ import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession } from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
-import { loadMessages, saveMessages } from "../messageStore"
+import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity } from "../storage"
+import { removeContact } from "../contacts"
 
 function getInitData() {
     return window.Telegram?.WebApp?.initData || null
@@ -31,6 +32,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const [sending, setSending] = useState(false)
     const [error, setError] = useState(null)
     const [debugLog, setDebugLog] = useState([])
+    const [deleteConfirm, setDeleteConfirm] = useState(false)
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
     const messagesRef = useRef([])
@@ -197,6 +199,12 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
     }
 
+    async function handleDeleteChat() {
+        clearMessages(contactId)
+        removeContact(contactId)
+        onBack()
+    }
+
     const displayName = contactName ?? String(contactId)
     const initials = displayName.replace(/^@/, "").slice(0, 2).toUpperCase()
     const [debugOpen, setDebugOpen] = useState(false)
@@ -205,7 +213,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
 
             <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, background: "#1f2b38", borderBottom: "1px solid #2a3a4a", flexShrink: 0 }}>
-                <button onClick={onBack} style={{ background: "none", border: "none", color: "#6ab3f3", fontSize: 22, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>←</button>
+                <button onClick={onBack} style={{ background: "none", border: "none", color: "#6ab3f3", cursor: "pointer", padding: "4px", lineHeight: 1, display: "flex", alignItems: "center" }}>
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                </button>
                 <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#2b5278", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>
                     {initials}
                 </div>
@@ -213,6 +223,17 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     <div style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
                     <div style={{ fontSize: 11, color: "#6ab3f3", cursor: "pointer" }} onClick={() => setDebugOpen(o => !o)}>🔒 End-to-end encrypted{debugLog.length > 0 ? ` · ${debugLog.length}` : ""}</div>
                 </div>
+                {deleteConfirm ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12, color: "#ff6b6b" }}>Delete chat?</span>
+                        <button onClick={handleDeleteChat} style={{ background: "#c0392b", border: "none", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>Delete</button>
+                        <button onClick={() => setDeleteConfirm(false)} style={{ background: "none", border: "none", color: "#708499", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
+                    </div>
+                ) : (
+                    <button onClick={() => setDeleteConfirm(true)} style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center" }}>
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" /></svg>
+                    </button>
+                )}
             </div>
 
             {debugOpen && (

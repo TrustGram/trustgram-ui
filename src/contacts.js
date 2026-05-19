@@ -25,6 +25,11 @@ export function getContactName(id) {
     return found ? found.name : String(id)
 }
 
+export function removeContact(id) {
+    const contacts = load().filter(c => c.id !== id)
+    localStorage.setItem(KEY, JSON.stringify(contacts))
+}
+
 export function clearContacts() {
     localStorage.removeItem(KEY)
 }

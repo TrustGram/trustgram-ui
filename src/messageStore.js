@@ -37,6 +37,10 @@ export async function saveMessages(contactId, messages, storageKey) {
     }))
 }
 
+export function clearMessages(contactId) {
+    localStorage.removeItem(PREFIX + contactId)
+}
+
 export function clearAllMessages() {
     Object.keys(localStorage)
         .filter(k => k.startsWith(PREFIX))
