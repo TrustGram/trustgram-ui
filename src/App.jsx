@@ -1,26 +1,59 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { Spinner } from "@telegram-apps/telegram-ui"
 import Setup from "./screens/Setup"
 import ChatList from "./screens/ChatList"
 import Chat from "./screens/Chat"
+import PinLock from "./screens/PinLock"
+import PinSetup from "./screens/PinSetup"
 import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey } from "./storage"
 import { clearAllMessages } from "./messageStore"
 import { clearContacts } from "./contacts"
+import { hasPin, clearPin, shouldLockOnOpen, updateLastActivity, getLockInterval } from "./pin"
 
 export default function App() {
     const [identity, setIdentity] = useState(null)
     const [storageKey, setStorageKey] = useState(null)
     const [loading, setLoading] = useState(true)
     const [activeChat, setActiveChat] = useState(null)
+    const [locked, setLocked] = useState(false)
+    const [pinScreen, setPinScreen] = useState(null) // null | "setup" | "change" | "disable"
+    const lastActivityRef = useRef(Date.now())
 
     useEffect(() => {
         Promise.all([loadIdentity(), getOrCreateStorageKey()])
             .then(([saved, key]) => {
                 if (saved) setIdentity(saved)
                 setStorageKey(key)
+                if (shouldLockOnOpen()) setLocked(true)
             })
             .catch(console.error)
             .finally(() => setLoading(false))
+    }, [])
+
+    useEffect(() => {
+        const resetActivity = () => {
+            lastActivityRef.current = Date.now()
+            updateLastActivity()
+        }
+
+        const checkLock = () => {
+            if (!hasPin()) return
+            const interval = getLockInterval()
+            if (interval === null) return
+            if (interval === 0 || Date.now() - lastActivityRef.current >= interval) setLocked(true)
+        }
+
+        document.addEventListener("click", resetActivity)
+        document.addEventListener("touchstart", resetActivity)
+        document.addEventListener("keydown", resetActivity)
+        document.addEventListener("visibilitychange", checkLock)
+
+        return () => {
+            document.removeEventListener("click", resetActivity)
+            document.removeEventListener("touchstart", resetActivity)
+            document.removeEventListener("keydown", resetActivity)
+            document.removeEventListener("visibilitychange", checkLock)
+        }
     }, [])
 
     async function handleSetupDone(newIdentity) {
@@ -36,6 +69,7 @@ export default function App() {
     async function handleResetKeys() {
         clearAllMessages()
         clearContacts()
+        clearPin()
         localStorage.removeItem("tg_otk_remaining")
         await clearIdentity()
         setIdentity(null)
@@ -51,8 +85,18 @@ export default function App() {
         )
     }
 
-    if (!identity) {
-        return <Setup onDone={handleSetupDone} />
+    if (!identity) return <Setup onDone={handleSetupDone} />
+
+    if (locked) return <PinLock onUnlock={() => setLocked(false)} />
+
+    if (pinScreen) {
+        return (
+            <PinSetup
+                mode={pinScreen}
+                onDone={() => setPinScreen(null)}
+                onCancel={() => setPinScreen(null)}
+            />
+        )
     }
 
     if (activeChat) {
@@ -68,5 +112,11 @@ export default function App() {
         )
     }
 
-    return <ChatList onOpenChat={setActiveChat} onResetKeys={handleResetKeys} />
+    return (
+        <ChatList
+            onOpenChat={setActiveChat}
+            onResetKeys={handleResetKeys}
+            onPinSettings={mode => setPinScreen(mode)}
+        />
+    )
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
 import { fetchInbox, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName, removeContact } from "../contacts"
+import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
 
 function DeleteButton({ id, deleteTarget, setDeleteTarget, onDelete }) {
@@ -35,7 +36,7 @@ function groupByContact(messages) {
     return Array.from(map.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 }
 
-export default function ChatList({ onOpenChat, onResetKeys }) {
+export default function ChatList({ onOpenChat, onResetKeys, onPinSettings }) {
     const [inboxContacts, setInboxContacts] = useState([])
     const [savedContacts, setSavedContacts] = useState(() => getContacts())
     const [loading, setLoading] = useState(true)
@@ -127,7 +128,22 @@ export default function ChatList({ onOpenChat, onResetKeys }) {
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></svg>
                     </button>
                     {settingsOpen && (
-                        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, background: "#1f2b38", border: "1px solid #2a3a4a", borderRadius: 8, zIndex: 10, minWidth: 140, boxShadow: "0 4px 12px rgba(0,0,0,0.4)" }}>
+                        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, background: "#1f2b38", border: "1px solid #2a3a4a", borderRadius: 8, zIndex: 10, minWidth: 160, boxShadow: "0 4px 12px rgba(0,0,0,0.4)" }}>
+                            {!hasPin() && (
+                                <button onClick={() => { setSettingsOpen(false); onPinSettings("setup") }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                    Set PIN
+                                </button>
+                            )}
+                            {hasPin() && (
+                                <>
+                                    <button onClick={() => { setSettingsOpen(false); onPinSettings("change") }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                        Change PIN
+                                    </button>
+                                    <button onClick={() => { setSettingsOpen(false); onPinSettings("disable") }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
+                                        Disable PIN
+                                    </button>
+                                </>
+                            )}
                             <button onClick={() => { setSettingsOpen(false); onResetKeys() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 14, textAlign: "left" }}>
                                 Reset keys
                             </button>
