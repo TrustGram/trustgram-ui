@@ -2,8 +2,8 @@ import React, { useRef, useState } from "react"
 import { Spinner } from "@telegram-apps/telegram-ui"
 import { exportChats, importChats, formatCode } from "../export"
 
-export default function ExportImport({ storageKey, onBack }) {
-    const [tab, setTab] = useState("export") // "export" | "import"
+export default function ExportImport({ storageKey, onBack, defaultTab = "export" }) {
+    const [tab, setTab] = useState(defaultTab) // "export" | "import"
 
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>

@@ -4,6 +4,7 @@ import { fetchInbox, fetchBundle, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName } from "../contacts"
 import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
+import { exportSingleChat, formatCode } from "../export"
 
 function DeleteButton({ id, deleteTarget, setDeleteTarget, onDelete }) {
     if (deleteTarget === id) {
@@ -36,7 +37,7 @@ function groupByContact(messages) {
     return Array.from(map.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 }
 
-export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExport }) {
+export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExport, onImport, storageKey }) {
     const [inboxContacts, setInboxContacts] = useState([])
     const [savedContacts, setSavedContacts] = useState(() => getContacts())
     const [loading, setLoading] = useState(true)
@@ -46,12 +47,39 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
     const [newChatError, setNewChatError] = useState("")
     const [settingsOpen, setSettingsOpen] = useState(false)
     const [deleteTarget, setDeleteTarget] = useState(null)
+    const [chatExport, setChatExport] = useState(null) // null | { state, id, code, name, error }
+    const [exportCopied, setExportCopied] = useState(false)
+    const settingsRef = useRef(null)
 
     function handleDeleteChat(id) {
         clearMessages(id)
         setDeleteTarget(null)
     }
-    const settingsRef = useRef(null)
+
+    async function handleExportChat(id, name) {
+        setChatExport({ state: "loading", id, name })
+        try {
+            const { payload, code } = await exportSingleChat(id, name, storageKey)
+            const blob = new Blob([payload], { type: "application/json" })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            const safeName = String(name).replace(/[^a-zA-Z0-9_]/g, "_")
+            a.download = `trustgram_${safeName}_${new Date().toISOString().slice(0, 10)}.trustgram`
+            a.click()
+            URL.revokeObjectURL(url)
+            setChatExport({ state: "done", id, code, name })
+        } catch (e) {
+            setChatExport({ state: "error", error: e.message })
+        }
+    }
+
+    async function copyExportCode() {
+        if (!chatExport?.code) return
+        await navigator.clipboard.writeText(chatExport.code).catch(() => {})
+        setExportCopied(true)
+        setTimeout(() => setExportCopied(false), 2000)
+    }
 
     useEffect(() => {
         function handleClickOutside(e) {
@@ -117,8 +145,45 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
     const isEmpty = inboxContacts.length === 0 && extraSaved.length === 0
 
     return (
-        <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#17212b" }}>
+
+            {/* Backup code modal */}
+            {chatExport?.state === "done" && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                    <div style={{ background: "#1f2b38", borderRadius: 16, padding: "28px 24px", maxWidth: 340, width: "100%", textAlign: "center" }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+                        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Backup downloaded</div>
+                        <div style={{ fontSize: 13, color: "#708499", marginBottom: 20, lineHeight: 1.5 }}>
+                            Save this code — you'll need it to restore the chat. Without it the file cannot be decrypted.
+                        </div>
+                        <div style={{ fontSize: 11, color: "#708499", marginBottom: 8, letterSpacing: 1 }}>BACKUP CODE</div>
+                        <div style={{ fontSize: 20, fontFamily: "monospace", fontWeight: 700, letterSpacing: 2, color: "#6ab3f3", lineHeight: 2, marginBottom: 14 }}>
+                            {chatExport.code.split(" ").reduce((rows, word, i) =>
+                                i % 3 === 0 ? [...rows, [word]] : [...rows.slice(0, -1), [...rows[rows.length - 1], word]],
+                            []).map((row, i) => <div key={i}>{row.join(" ")}</div>)}
+                        </div>
+                        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+                            <button onClick={copyExportCode} style={{ padding: "8px 20px", borderRadius: 20, border: "none", background: exportCopied ? "#27ae60" : "#2b5278", color: "#fff", fontSize: 14, cursor: "pointer" }}>
+                                {exportCopied ? "Copied!" : "Copy code"}
+                            </button>
+                            <button onClick={() => { setChatExport(null); setExportCopied(false) }} style={{ padding: "8px 20px", borderRadius: 20, border: "none", background: "#2a3a4a", color: "#a0b8cc", fontSize: 14, cursor: "pointer" }}>
+                                Done
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {chatExport?.state === "error" && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                    <div style={{ background: "#1f2b38", borderRadius: 16, padding: "24px", maxWidth: 300, width: "100%", textAlign: "center" }}>
+                        <div style={{ fontSize: 13, color: "#ff6b6b", marginBottom: 16 }}>{chatExport.error}</div>
+                        <button onClick={() => setChatExport(null)} style={{ padding: "8px 24px", borderRadius: 20, border: "none", background: "#2a3a4a", color: "#fff", cursor: "pointer" }}>Close</button>
+                    </div>
+                </div>
+            )}
+
+            <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1f2b38", borderBottom: "1px solid #2a3a4a" }}>
                 <span style={{ fontSize: 20, fontWeight: 600 }}>TrustGram</span>
                 <div ref={settingsRef} style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
                     <Button size="s" onClick={() => { setNewChatError(""); setNewChatOpen(true) }}>New chat</Button>
@@ -143,7 +208,7 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                                 </>
                             )}
                             <button onClick={() => { setSettingsOpen(false); onExport() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#a0b8cc", cursor: "pointer", fontSize: 14, textAlign: "left", borderBottom: "1px solid #2a3a4a" }}>
-                                Backup &amp; Restore
+                                Backup all chats
                             </button>
                             <button onClick={() => { setSettingsOpen(false); onResetKeys() }} style={{ width: "100%", padding: "10px 14px", background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 14, textAlign: "left" }}>
                                 Reset keys
@@ -158,7 +223,9 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                     <Spinner size="l" />
                 </div>
             ) : isEmpty ? (
-                <Placeholder header="No chats yet" description="Start a new conversation by pressing 'New chat'" />
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Placeholder header="No chats yet" description="Start a new conversation by pressing 'New chat'" />
+                </div>
             ) : (
                 <div style={{ flex: 1, overflowY: "auto" }}>
                     {[
@@ -169,7 +236,7 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                         })),
                         ...extraSaved.map(c => ({ id: c.id, name: c.name, subtitle: "No messages yet" })),
                     ].map(({ id, name, subtitle }) => (
-                        <div key={id} style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid #1a2536", gap: 12 }}>
+                        <div key={id} style={{ display: "flex", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid #1a2536", gap: 8 }}>
                             <div
                                 onClick={() => onOpenChat({ id, name })}
                                 style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0, cursor: "pointer" }}
@@ -182,11 +249,32 @@ export default function ChatList({ onOpenChat, onResetKeys, onPinSettings, onExp
                                     <div style={{ fontSize: 12, color: "#708499", marginTop: 2 }}>{subtitle}</div>
                                 </div>
                             </div>
+                            <button
+                                onClick={e => { e.stopPropagation(); handleExportChat(id, name) }}
+                                disabled={chatExport?.state === "loading"}
+                                title="Export this chat"
+                                style={{ background: "none", border: "none", color: "#708499", cursor: "pointer", padding: "4px", display: "flex", alignItems: "center", flexShrink: 0 }}
+                            >
+                                {chatExport?.state === "loading" && chatExport?.id === id
+                                    ? <Spinner size="s" />
+                                    : <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                }
+                            </button>
                             <DeleteButton id={id} deleteTarget={deleteTarget} setDeleteTarget={setDeleteTarget} onDelete={handleDeleteChat} />
                         </div>
                     ))}
                 </div>
             )}
+
+            <div style={{ padding: "10px 16px", borderTop: "1px solid #2a3a4a", background: "#1f2b38", flexShrink: 0 }}>
+                <button
+                    onClick={onImport}
+                    style={{ width: "100%", padding: "11px", borderRadius: 10, border: "1.5px dashed #2a3a4a", background: "none", color: "#708499", fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Import backup
+                </button>
+            </div>
 
             <Modal open={newChatOpen} onOpenChange={setNewChatOpen} header={<Modal.Header>New chat</Modal.Header>}>
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>

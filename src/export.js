@@ -29,6 +29,29 @@ async function codeToKey(raw, usage) {
     )
 }
 
+export async function exportSingleChat(contactId, contactName, storageKey) {
+    const msgs = await loadMessages(contactId, storageKey)
+
+    const bundle = JSON.stringify({
+        version: 1,
+        exported_at: new Date().toISOString(),
+        contacts: [{ id: contactId, name: contactName }],
+        messages: msgs.length > 0 ? { [String(contactId)]: msgs } : {},
+    })
+
+    const code = generateBackupCode()
+    const key = await codeToKey(code, "encrypt")
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(bundle)
+    )
+
+    const payload = JSON.stringify({ version: 1, iv: to64(iv), data: to64(new Uint8Array(encrypted)) })
+    return { payload, code: formatCode(code) }
+}
+
 export async function exportChats(storageKey) {
     const contacts = getContacts()
     const messages = {}

@@ -19,6 +19,7 @@ export default function App() {
     const [locked, setLocked] = useState(false)
     const [pinScreen, setPinScreen] = useState(null) // null | "setup" | "change" | "disable"
     const [exportOpen, setExportOpen] = useState(false)
+    const [exportTab, setExportTab] = useState("export")
     const lastActivityRef = useRef(Date.now())
 
     useEffect(() => {
@@ -102,7 +103,7 @@ export default function App() {
     }
 
     if (exportOpen) {
-        return <ExportImport storageKey={storageKey} onBack={() => setExportOpen(false)} />
+        return <ExportImport storageKey={storageKey} defaultTab={exportTab} onBack={() => setExportOpen(false)} />
     }
 
     if (activeChat) {
@@ -123,7 +124,9 @@ export default function App() {
             onOpenChat={setActiveChat}
             onResetKeys={handleResetKeys}
             onPinSettings={mode => setPinScreen(mode)}
-            onExport={() => setExportOpen(true)}
+            onExport={() => { setExportTab("export"); setExportOpen(true) }}
+            onImport={() => { setExportTab("import"); setExportOpen(true) }}
+            storageKey={storageKey}
         />
     )
 }
