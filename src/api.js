@@ -17,11 +17,18 @@ export async function registerBundle(bundle, initData) {
     return res.json()
 }
 
+async function throwBundleError(res) {
+    if (res.status === 404) {
+        throw new Error("This contact hasn't set up TrustGram yet. Ask them to open the app and complete the setup.")
+    }
+    throw new Error(await res.text())
+}
+
 export async function fetchBundle(telegramId, initData) {
     const res = await fetch(`${API_URL}/api/v1/keys/${telegramId}`, {
         headers: headers(initData),
     })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await throwBundleError(res)
     return res.json()
 }
 
@@ -30,7 +37,7 @@ export async function fetchBundleByUsername(username, initData) {
     const res = await fetch(`${API_URL}/api/v1/keys/by-username/${clean}`, {
         headers: headers(initData),
     })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await throwBundleError(res)
     return res.json()
 }
 
