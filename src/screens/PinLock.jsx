@@ -6,6 +6,8 @@ const PIN_LENGTH = 4
 const MAX_ATTEMPTS = 5
 
 const CSS = `
+  .pin-root { scrollbar-width: none; }
+  .pin-root::-webkit-scrollbar { display: none; }
   @keyframes shake {
     0%,100%{ transform:translateX(0) }
     15%,45%,75%{ transform:translateX(-8px) }
@@ -94,7 +96,7 @@ export default function PinLock({ onUnlock }) {
     }
 
     return (
-        <div style={{
+        <div className="pin-root" style={{
             height: "100vh",
             height: "100dvh",
             display: "flex",
@@ -103,15 +105,16 @@ export default function PinLock({ onUnlock }) {
             background: "radial-gradient(ellipse 100% 70% at 50% 0%, #1c3550 0%, #17212b 55%)",
             boxSizing: "border-box",
             userSelect: "none",
-            overflow: "hidden",
+            overflowY: "auto",
         }}>
             <style>{CSS}</style>
 
-            {/* Top region — grows to fill space, content centered inside */}
+            {/* Top region — flex:1 pushes numpad to bottom; paddingTop prevents icon from touching edge */}
             <div style={{
                 flex: 1,
                 display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
                 width: "100%", minHeight: 0,
+                paddingTop: 24, paddingBottom: 8, boxSizing: "border-box",
             }}>
                 {/* Lock icon */}
                 <div style={{
