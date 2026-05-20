@@ -244,6 +244,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         }
     }
 
+    const keysAvailable = !!identity
+
     const displayName = contactName ?? String(contactId)
     const initials = displayName.replace(/^@/, "").slice(0, 2).toUpperCase()
     const [debugOpen, setDebugOpen] = useState(false)
@@ -364,7 +366,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
             {error && <div style={{ padding: "4px 16px", color: "#ff6b6b", fontSize: 12, background: "#1f2b38" }}>{error}</div>}
 
-            <div style={{ padding: "8px 10px 12px", background: "#1f2b38", borderTop: "1px solid rgba(42,58,74,0.7)", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+            {!keysAvailable && (
+                <div style={{ padding: "8px 16px", background: "#141e28", borderTop: "1px solid rgba(255,180,0,0.15)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#a07820" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                    <span style={{ fontSize: 12, color: "#8a6820", lineHeight: 1.4 }}>
+                        Imported chat — no keys on this device. Read-only.
+                    </span>
+                </div>
+            )}
+
+            <div style={{ padding: "8px 10px 12px", background: "#1f2b38", borderTop: "1px solid rgba(42,58,74,0.7)", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0, opacity: keysAvailable ? 1 : 0.45, pointerEvents: keysAvailable ? "auto" : "none" }}>
                 <div style={{ flex: 1, background: "#17212b", borderRadius: 22, padding: "10px 16px", display: "flex", alignItems: "center", border: "1px solid rgba(255,255,255,0.055)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.2)" }}>
                     <input
                         ref={inputRef}
@@ -373,18 +386,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                         value={input}
                         onChange={e => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        disabled={sending}
+                        disabled={sending || !keysAvailable}
                         style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#e8f0f7", fontSize: 15, fontFamily: "inherit" }}
                     />
                 </div>
                 <button
                     onClick={handleSend}
-                    disabled={sending || !input.trim()}
-                    className={`chat-send-btn${input.trim() ? " active" : ""}`}
+                    disabled={sending || !input.trim() || !keysAvailable}
+                    className={`chat-send-btn${input.trim() && keysAvailable ? " active" : ""}`}
                     style={{
                         width: 44, height: 44, borderRadius: "50%", border: "none", flexShrink: 0,
-                        background: input.trim() ? "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)" : "#2a3a4a",
-                        color: "#fff", cursor: input.trim() ? "pointer" : "default",
+                        background: input.trim() && keysAvailable ? "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)" : "#2a3a4a",
+                        color: "#fff", cursor: input.trim() && keysAvailable ? "pointer" : "default",
                         display: "flex", alignItems: "center", justifyContent: "center",
                     }}
                 >
