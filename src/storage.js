@@ -69,6 +69,14 @@ export async function clearIdentity() {
     await idbDelete(db, "storage_key")
 }
 
+export async function updateSPKInIdentity(newSpkKeyPair) {
+    const db = await openDB()
+    const identity = await idbGet(db, "identity")
+    if (!identity) return
+    identity.signedPreKey = newSpkKeyPair
+    await idbPut(db, "identity", identity)
+}
+
 export async function appendOTKsToIdentity(newPairs) {
     const db = await openDB()
     const identity = await idbGet(db, "identity")

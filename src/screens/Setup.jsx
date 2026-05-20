@@ -36,6 +36,7 @@ export default function Setup({ onDone }) {
                 })),
             }, initData)
 
+            localStorage.setItem("tg_spk_rotated_at", String(Date.now()))
             setStatus(STATUS.DONE)
             setTimeout(() => onDone(identity), 800)
         } catch (e) {

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession, computeFingerprint } from "../crypto"
-import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs } from "../api"
+import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs, fetchOTKCount } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity, consumeOTK } from "../storage"
 
@@ -71,33 +71,35 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     async function maybeRefillOTKs() {
         if (refillInProgress.current) return
-        const OTK_BATCH = 10
-        const OTK_THRESHOLD_KEY = "tg_otk_remaining"
-        const remaining = parseInt(localStorage.getItem(OTK_THRESHOLD_KEY) ?? "10", 10)
-        if (remaining > 3) {
-            localStorage.setItem(OTK_THRESHOLD_KEY, String(remaining - 1))
-            return
-        }
+        // throttle: check server at most once per 10 minutes per session
+        const OTK_COOLDOWN_MS = 10 * 60 * 1000
+        const lastCheck = parseInt(localStorage.getItem("tg_otk_last_check") ?? "0", 10)
+        if (Date.now() - lastCheck < OTK_COOLDOWN_MS) return
+
         refillInProgress.current = true
+        localStorage.setItem("tg_otk_last_check", String(Date.now()))
         try {
-            const pairs = await Promise.all(
-                Array.from({ length: OTK_BATCH }, () =>
-                    crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"])
+            const { count } = await fetchOTKCount(initData)
+            if (count < 5) {
+                const OTK_BATCH = 20
+                const pairs = await Promise.all(
+                    Array.from({ length: OTK_BATCH }, () =>
+                        crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"])
+                    )
                 )
-            )
-            const oneTimeKeys = await Promise.all(
-                pairs.map(async (kp, i) => {
-                    const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
-                    const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
-                    return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
-                })
-            )
-            // Store private keys BEFORE uploading to server — if app closes between the two,
-            // we'd rather have orphaned server keys than unrecoverable server-side OTKs.
-            await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
-            await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
-            localStorage.setItem(OTK_THRESHOLD_KEY, String(OTK_BATCH))
-            if (onIdentityRefresh) await onIdentityRefresh()
+                const oneTimeKeys = await Promise.all(
+                    pairs.map(async (kp, i) => {
+                        const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
+                        const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+                        return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
+                    })
+                )
+                // Store private keys BEFORE uploading to server — if app closes between the two,
+                // we'd rather have orphaned server keys than unrecoverable server-side OTKs.
+                await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
+                await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
+                if (onIdentityRefresh) await onIdentityRefresh()
+            }
         } catch {}
         refillInProgress.current = false
     }

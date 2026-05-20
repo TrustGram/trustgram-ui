@@ -61,6 +61,24 @@ export async function deleteMessage(messageId, initData) {
     return res.json()
 }
 
+export async function fetchOTKCount(initData) {
+    const res = await fetch(`${API_URL}/api/v1/keys/otk/count`, {
+        headers: headers(initData),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
+export async function updateSPK(signedPreKey, signature, initData) {
+    const res = await fetch(`${API_URL}/api/v1/keys/spk`, {
+        method: "PUT",
+        headers: headers(initData),
+        body: JSON.stringify({ signed_pre_key: signedPreKey, signature }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}
+
 export async function refillOTKs(oneTimeKeys, initData) {
     const res = await fetch(`${API_URL}/api/v1/keys/otk`, {
         method: "POST",
