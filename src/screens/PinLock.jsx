@@ -8,43 +8,48 @@ const MAX_ATTEMPTS = 5
 const CSS = `
   @keyframes shake {
     0%,100%{ transform:translateX(0) }
-    15%,45%,75%{ transform:translateX(-7px) }
-    30%,60%,90%{ transform:translateX(7px) }
+    15%,45%,75%{ transform:translateX(-8px) }
+    30%,60%,90%{ transform:translateX(8px) }
   }
-  @keyframes lockBounce {
-    0%{ transform:scale(1) }
-    40%{ transform:scale(0.88) }
-    70%{ transform:scale(1.08) }
-    100%{ transform:scale(1) }
+  @keyframes lockPulse {
+    0%{ transform:scale(1); box-shadow:0 12px 40px rgba(0,0,0,0.5), 0 0 0 0 rgba(106,179,243,0.3); }
+    50%{ transform:scale(0.93); box-shadow:0 6px 20px rgba(0,0,0,0.4), 0 0 0 12px rgba(106,179,243,0); }
+    100%{ transform:scale(1); box-shadow:0 12px 40px rgba(0,0,0,0.5), 0 0 0 0 rgba(106,179,243,0); }
+  }
+  @keyframes dotPop {
+    0%{ transform:scale(0.6) }
+    60%{ transform:scale(1.25) }
+    100%{ transform:scale(1.1) }
   }
   .pin-key {
-    transition: background 0.12s, transform 0.1s, box-shadow 0.12s !important;
+    transition: background 0.1s, transform 0.08s, box-shadow 0.1s !important;
     -webkit-tap-highlight-color: transparent;
-  }
-  .pin-key:not(:disabled):hover {
-    background: rgba(43,82,120,0.5) !important;
-    box-shadow: 0 0 0 1px rgba(106,179,243,0.15) !important;
+    outline: none !important;
   }
   .pin-key:not(:disabled):active {
-    background: rgba(43,82,120,0.8) !important;
-    transform: scale(0.91) !important;
+    transform: scale(0.88) !important;
+    background: rgba(43,82,120,0.85) !important;
   }
 `
 
-function PinDots({ value }) {
+function PinDots({ value, shake }) {
     return (
-        <div style={{ display: "flex", gap: 22, justifyContent: "center", margin: "28px 0 22px" }}>
+        <div style={{
+            display: "flex", gap: 20, justifyContent: "center",
+            animation: shake ? "shake 0.5s" : "none",
+            margin: "32px 0 28px",
+        }}>
             {Array.from({ length: PIN_LENGTH }, (_, i) => {
                 const filled = i < value.length
                 return (
                     <div key={i} style={{
-                        width: 14, height: 14, borderRadius: "50%",
+                        width: 16, height: 16, borderRadius: "50%",
                         background: filled ? "#6ab3f3" : "transparent",
-                        border: "2px solid",
-                        borderColor: filled ? "#6ab3f3" : "rgba(106,179,243,0.3)",
-                        boxShadow: filled ? "0 0 10px rgba(106,179,243,0.55), 0 0 22px rgba(106,179,243,0.18)" : "none",
-                        transform: filled ? "scale(1.15)" : "scale(1)",
-                        transition: "all 0.18s cubic-bezier(0.34,1.56,0.64,1)",
+                        border: `2px solid ${filled ? "#6ab3f3" : "rgba(106,179,243,0.25)"}`,
+                        boxShadow: filled ? "0 0 14px rgba(106,179,243,0.7), 0 0 30px rgba(106,179,243,0.2)" : "none",
+                        transform: filled ? "scale(1.1)" : "scale(1)",
+                        animation: filled ? "dotPop 0.2s ease-out forwards" : "none",
+                        transition: "border-color 0.2s, background 0.2s",
                     }} />
                 )
             })}
@@ -58,7 +63,7 @@ export default function PinLock({ onUnlock }) {
     const [attempts, setAttempts] = useState(0)
     const [checking, setChecking] = useState(false)
     const [shake, setShake] = useState(false)
-    const [lockBounce, setLockBounce] = useState(false)
+    const [lockAnim, setLockAnim] = useState(false)
 
     async function handleDigit(d) {
         if (checking || attempts >= MAX_ATTEMPTS) return
@@ -78,8 +83,8 @@ export default function PinLock({ onUnlock }) {
             const newAttempts = attempts + 1
             setAttempts(newAttempts)
             setShake(true)
-            setLockBounce(true)
-            setTimeout(() => { setShake(false); setLockBounce(false) }, 500)
+            setLockAnim(true)
+            setTimeout(() => { setShake(false); setLockAnim(false) }, 600)
             setPin("")
             setError(newAttempts >= MAX_ATTEMPTS
                 ? "Too many attempts. Restart the app."
@@ -90,49 +95,60 @@ export default function PinLock({ onUnlock }) {
 
     return (
         <div style={{
-            height: "100vh",
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            background: "radial-gradient(ellipse 80% 60% at 50% 20%, #1a3048 0%, #17212b 70%)",
+            minHeight: "100vh",
+            minHeight: "100dvh",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            background: "radial-gradient(ellipse 100% 70% at 50% 0%, #1c3550 0%, #17212b 55%)",
+            paddingTop: 56,
+            paddingBottom: "max(80px, env(safe-area-inset-bottom, 80px))",
+            boxSizing: "border-box",
             userSelect: "none",
+            overflowY: "auto",
         }}>
             <style>{CSS}</style>
 
-            {/* Icon */}
+            {/* Lock icon */}
             <div style={{
-                animation: lockBounce ? "lockBounce 0.45s ease" : "none",
-                width: 68, height: 68, borderRadius: 22,
-                background: "linear-gradient(145deg, #1e3a5c 0%, #152d47 100%)",
-                border: "1px solid rgba(106,179,243,0.18)",
-                boxShadow: "0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.06)",
+                animation: lockAnim ? "lockPulse 0.55s ease" : "none",
+                width: 96, height: 96, borderRadius: 30,
+                background: "linear-gradient(150deg, #213d5a 0%, #152d47 100%)",
+                border: "1px solid rgba(106,179,243,0.2)",
+                boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                marginBottom: 22,
+                marginBottom: 24,
             }}>
-                <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#6ab3f3" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2"/>
+                <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#6ab3f3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2.5"/>
                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
             </div>
 
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#e8f0f7", letterSpacing: "-0.4px" }}>TrustGram</div>
-            <div style={{ fontSize: 13, color: "#708499", marginTop: 5, fontWeight: 400, letterSpacing: "0.1px" }}>Enter your PIN to continue</div>
-
-            <div style={{ animation: shake ? "shake 0.5s" : "none" }}>
-                <PinDots value={pin} />
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#e8f0f7", letterSpacing: "-0.5px" }}>
+                TrustGram
+            </div>
+            <div style={{ fontSize: 14, color: "#708499", marginTop: 6, letterSpacing: "0.1px" }}>
+                Enter your PIN to continue
             </div>
 
-            <div style={{ height: 32, display: "flex", alignItems: "center", marginBottom: 12 }}>
+            <PinDots value={pin} shake={shake} />
+
+            {/* Error message */}
+            <div style={{ height: 34, display: "flex", alignItems: "center", marginBottom: 20 }}>
                 {error && (
                     <div style={{
-                        fontSize: 12, color: "#ff8888",
-                        background: "rgba(255,100,100,0.08)",
-                        border: "1px solid rgba(255,100,100,0.18)",
-                        borderRadius: 20, padding: "5px 14px",
+                        fontSize: 12.5, color: "#ff9090",
+                        background: "rgba(255,80,80,0.09)",
+                        border: "1px solid rgba(255,80,80,0.2)",
+                        borderRadius: 20, padding: "6px 16px",
                         letterSpacing: "0.1px",
                     }}>{error}</div>
                 )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 11 }}>
+            {/* Numpad */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
                 {NUMPAD.map((d, i) => (
                     <button
                         key={i}
@@ -140,15 +156,16 @@ export default function PinLock({ onUnlock }) {
                         onClick={() => handleDigit(d)}
                         disabled={!d || attempts >= MAX_ATTEMPTS}
                         style={{
-                            width: 78, height: 78, borderRadius: "50%",
-                            fontSize: d === "⌫" ? 20 : 28,
+                            width: 82, height: 82, borderRadius: "50%",
+                            fontSize: d === "⌫" ? 22 : 30,
                             fontWeight: d === "⌫" ? 400 : 300,
                             border: "none",
                             cursor: d ? "pointer" : "default",
-                            background: d ? "rgba(31,43,56,0.9)" : "transparent",
+                            background: d ? "rgba(31,43,56,0.95)" : "transparent",
                             color: d ? "#e8f0f7" : "transparent",
-                            boxShadow: d ? "0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)" : "none",
+                            boxShadow: d ? "0 3px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
                             fontFamily: "inherit",
+                            opacity: attempts >= MAX_ATTEMPTS && d ? 0.4 : 1,
                         }}
                     >
                         {d}
