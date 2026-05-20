@@ -7,6 +7,7 @@ import PinLock from "./screens/PinLock"
 import PinSetup from "./screens/PinSetup"
 import ExportImport from "./screens/ExportImport"
 import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey, appendOTKsToIdentity, updateSPKInIdentity } from "./storage"
+import { signSPK } from "./crypto"
 import { clearAllMessages } from "./messageStore"
 import { clearContacts } from "./contacts"
 import { hasPin, clearPin, shouldLockOnOpen, updateLastActivity, getLockInterval } from "./pin"
@@ -52,9 +53,10 @@ async function checkKeyHealth(identity, storageKey, initData, refreshIdentity) {
             )
             const raw = await crypto.subtle.exportKey("raw", newSpkKeyPair.publicKey)
             const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+            const signature = await signSPK(identity, newSpkKeyPair)
 
             // upload to server first; only persist locally on success
-            await updateSPK(pub, "", initData)
+            await updateSPK(pub, signature, initData)
             await updateSPKInIdentity(newSpkKeyPair)
             localStorage.setItem("tg_spk_rotated_at", String(Date.now()))
             await refreshIdentity()

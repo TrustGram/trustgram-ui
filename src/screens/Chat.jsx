@@ -319,7 +319,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             pushDebug(`→ send otk:${otkPub?.slice(0, 8) ?? "null"}`)
             const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
                 identityKey: bundle.identity_key,
+                signingKey: bundle.signing_key,
                 signedPreKey: bundle.signed_pre_key,
+                signedPreKeySignature: bundle.signature,
                 oneTimePreKey: otkPub ?? null,
             })
             const { message } = await encryptMessage(sessionState, text)
@@ -377,7 +379,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             pushDebug(`→ file otk:${otkPub?.slice(0, 8) ?? "null"}`)
             const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
                 identityKey: bundle.identity_key,
+                signingKey: bundle.signing_key,
                 signedPreKey: bundle.signed_pre_key,
+                signedPreKeySignature: bundle.signature,
                 oneTimePreKey: otkPub ?? null,
             })
             const { message } = await encryptMessage(sessionState, filePayload)
@@ -399,7 +403,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         setSafetyNumbers({ display: null, hex: null, loading: true, showHex: false })
         try {
             const bundle = await fetchBundle(contactId, initData)
-            const { hex, display } = await computeFingerprint(identityRef.current, bundle.identity_key)
+            const { hex, display } = await computeFingerprint(identityRef.current, bundle.identity_key, bundle.signing_key)
             setSafetyNumbers({ hex, display, loading: false, showHex: false })
         } catch (e) {
             setSafetyNumbers(null)

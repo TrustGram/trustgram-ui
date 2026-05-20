@@ -28,8 +28,9 @@ export default function Setup({ onDone }) {
 
             await registerBundle({
                 identity_key: publicBundle.identityKey,
+                signing_key: publicBundle.signingKey,
                 signed_pre_key: publicBundle.signedPreKey,
-                signature: "",
+                signature: publicBundle.signedPreKeySignature,
                 one_time_keys: publicBundle.oneTimePreKeys.map((pub, i) => ({
                     key_id: String(i),
                     public_key: pub,
