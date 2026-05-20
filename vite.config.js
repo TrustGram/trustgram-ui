@@ -20,6 +20,9 @@ export default defineConfig({
     server: {
         port: 5173,
     },
+    build: {
+        sourcemap: true,
+    },
     define: {
         __COMMIT_HASH__: JSON.stringify(getCommitHash()),
         __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
