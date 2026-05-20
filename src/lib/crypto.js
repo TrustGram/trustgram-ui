@@ -93,28 +93,84 @@ async function aesDecrypt(keyBytes, iv, ciphertext) {
 async function sha256(data) {
   return crypto.subtle.digest("SHA-256", data);
 }
+async function generateSigningKeyPair() {
+  return crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign", "verify"]
+  );
+}
+async function exportSigningPublicKey(key) {
+  const spki = await crypto.subtle.exportKey("spki", key);
+  return toBase64(spki);
+}
+async function importSigningPublicKey(b64) {
+  return crypto.subtle.importKey(
+    "spki",
+    fromBase64(b64),
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["verify"]
+  );
+}
+async function ecdsaSign(privateKey, message) {
+  const sig = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    privateKey,
+    message
+  );
+  return toBase64(sig);
+}
+async function ecdsaVerify(publicKey, signatureB64, message) {
+  return crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    publicKey,
+    fromBase64(signatureB64),
+    message
+  );
+}
 
 // src/x3dh.ts
 var ONE_TIME_PREKEY_COUNT = 10;
 async function generateIdentityBundle() {
   const identityKey = await generateKeyPair();
+  const signingKey = await generateSigningKeyPair();
   const signedPreKey = await generateKeyPair();
   const oneTimePreKeys = [];
   for (let i = 0; i < ONE_TIME_PREKEY_COUNT; i++) {
     oneTimePreKeys.push(await generateKeyPair());
   }
-  return { identityKey, signedPreKey, oneTimePreKeys };
+  return { identityKey, signingKey, signedPreKey, oneTimePreKeys };
+}
+async function signSignedPreKey(signingKey, signedPreKeyPub) {
+  const rawSpk = await crypto.subtle.exportKey("raw", signedPreKeyPub);
+  return ecdsaSign(signingKey.privateKey, rawSpk);
 }
 async function exportPublicBundle(bundle) {
+  const signedPreKeySignature = await signSignedPreKey(bundle.signingKey, bundle.signedPreKey.publicKey);
   return {
     identityKey: await exportPublicKey(bundle.identityKey.publicKey),
+    signingKey: await exportSigningPublicKey(bundle.signingKey.publicKey),
     signedPreKey: await exportPublicKey(bundle.signedPreKey.publicKey),
+    signedPreKeySignature,
     oneTimePreKeys: await Promise.all(
       bundle.oneTimePreKeys.map((kp) => exportPublicKey(kp.publicKey))
     )
   };
 }
+async function verifyRecipientBundle(bundle) {
+  if (!bundle.signedPreKeySignature) {
+    throw new Error("Recipient bundle is missing SPK signature");
+  }
+  const signingPub = await importSigningPublicKey(bundle.signingKey);
+  const rawSpk = fromBase64(bundle.signedPreKey);
+  const ok = await ecdsaVerify(signingPub, bundle.signedPreKeySignature, rawSpk);
+  if (!ok) {
+    throw new Error("Invalid SPK signature \u2014 possible MITM attack");
+  }
+}
 async function x3dhSend(myIdentityKey, recipientBundle) {
+  await verifyRecipientBundle(recipientBundle);
   const ephemeralKey = await generateKeyPair();
   const theirIK = await importPublicKey(recipientBundle.identityKey);
   const theirSPK = await importPublicKey(recipientBundle.signedPreKey);
@@ -310,6 +366,9 @@ async function createIdentity() {
 async function getPublicBundle(identity) {
   return exportPublicBundle(identity);
 }
+async function signSPK(identity, newSignedPreKey) {
+  return signSignedPreKey(identity.signingKey, newSignedPreKey.publicKey);
+}
 async function initiateSession(myIdentity, theirBundle) {
   const { masterSecret, senderBundle } = await x3dhSend(myIdentity.identityKey, theirBundle);
   const state = await initSenderRatchet(masterSecret, theirBundle.signedPreKey);
@@ -342,16 +401,24 @@ async function encryptMessage(state, plaintext) {
 async function decryptMessage(state, message) {
   return ratchetDecrypt(state, message);
 }
-async function computeFingerprint(myIdentity, theirIdentityKeyB64) {
-  const myPubRaw = await crypto.subtle.exportKey("raw", myIdentity.identityKey.publicKey);
-  const theirPubRaw = fromBase64(theirIdentityKeyB64);
-  const myArr = new Uint8Array(myPubRaw);
-  const theirArr = new Uint8Array(theirPubRaw);
+async function computeFingerprint(myIdentity, theirIdentityKeyB64, theirSigningKeyB64) {
+  const myIdRaw = new Uint8Array(await crypto.subtle.exportKey("raw", myIdentity.identityKey.publicKey));
+  const mySignRaw = new Uint8Array(fromBase64(await exportSigningPublicKey(myIdentity.signingKey.publicKey)));
+  const myHalf = new Uint8Array(myIdRaw.length + mySignRaw.length);
+  myHalf.set(myIdRaw, 0);
+  myHalf.set(mySignRaw, myIdRaw.length);
+  const theirIdRaw = new Uint8Array(fromBase64(theirIdentityKeyB64));
+  const theirSignRaw = new Uint8Array(fromBase64(theirSigningKeyB64));
+  const theirHalf = new Uint8Array(theirIdRaw.length + theirSignRaw.length);
+  theirHalf.set(theirIdRaw, 0);
+  theirHalf.set(theirSignRaw, theirIdRaw.length);
   let cmp = 0;
-  for (let i = 0; i < myArr.length && cmp === 0; i++) {
-    cmp = myArr[i] - theirArr[i];
+  const minLen = Math.min(myHalf.length, theirHalf.length);
+  for (let i = 0; i < minLen && cmp === 0; i++) {
+    cmp = myHalf[i] - theirHalf[i];
   }
-  const combined = cmp < 0 ? new Uint8Array([...myArr, ...theirArr]) : new Uint8Array([...theirArr, ...myArr]);
+  if (cmp === 0) cmp = myHalf.length - theirHalf.length;
+  const combined = cmp < 0 ? new Uint8Array([...myHalf, ...theirHalf]) : new Uint8Array([...theirHalf, ...myHalf]);
   const hash = await sha256(combined.buffer);
   const hex = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
   const display = hex.match(/.{1,4}/g).join(" ");
@@ -364,6 +431,7 @@ export {
   decryptMessage,
   encryptMessage,
   getPublicBundle,
-  initiateSession
+  initiateSession,
+  signSPK
 };
 //# sourceMappingURL=crypto.js.map
