@@ -5,6 +5,108 @@ import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs, fetchO
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { appendOTKsToIdentity, consumeOTK } from "../storage"
 
+const FILE_MAX_BYTES = 512 * 1024 // 512 KB
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function bufToBase64(buffer) {
+    const bytes = new Uint8Array(buffer)
+    let binary = ""
+    const CHUNK = 8192
+    for (let i = 0; i < bytes.length; i += CHUNK)
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+    return btoa(binary)
+}
+
+async function streamTransform(buffer, Stream) {
+    const s = new Stream("deflate-raw")
+    const writer = s.writable.getWriter()
+    writer.write(new Uint8Array(buffer))
+    writer.close()
+    const chunks = []
+    const reader = s.readable.getReader()
+    for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+    }
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+    let off = 0
+    for (const c of chunks) { out.set(c, off); off += c.length }
+    return out.buffer
+}
+
+const compressData   = buf => streamTransform(buf, CompressionStream)
+const decompressData = buf => streamTransform(buf, DecompressionStream)
+
+function FileCard({ file }) {
+    const isImage = file.mimeType?.startsWith("image/")
+    const [imgSrc, setImgSrc] = React.useState(null)
+
+    React.useEffect(() => {
+        if (!isImage) return
+        let url
+        ;(async () => {
+            const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
+            const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
+            url = URL.createObjectURL(new Blob([buf], { type: file.mimeType }))
+            setImgSrc(url)
+        })()
+        return () => { if (url) URL.revokeObjectURL(url) }
+    }, [file.data, file.compressed])
+
+    async function handleDownload() {
+        const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
+        const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
+        const blob = new Blob([buf], { type: file.mimeType || "application/octet-stream" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = file.name
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+    }
+
+    return (
+        <div style={{ minWidth: 180, maxWidth: 240 }}>
+            {isImage && imgSrc && (
+                <img
+                    src={imgSrc}
+                    alt={file.name}
+                    style={{ width: "100%", borderRadius: 8, marginBottom: 8, display: "block", maxHeight: 200, objectFit: "cover" }}
+                />
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {!isImage && (
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.65 }}>
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
+                    <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>{formatFileSize(file.size)}</div>
+                </div>
+                <button onClick={handleDownload} title="Download" style={{
+                    background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8,
+                    padding: "6px 8px", cursor: "pointer", color: "inherit", flexShrink: 0,
+                    display: "flex", alignItems: "center", transition: "background 0.12s",
+                }}>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    )
+}
+
 const EMOJI_SET = [
     "🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐒",
     "🦆","🦅","🦉","🦇","🐝","🐛","🦋","🐌","🐞","🐜","🦗","🐢","🐍","🦎","🐙","🦑",
@@ -52,12 +154,14 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const [input, setInput] = useState("")
     const [loading, setLoading] = useState(true)
     const [sending, setSending] = useState(false)
+    const [sendingFile, setSendingFile] = useState(false)
     const [error, setError] = useState(null)
     const [debugLog, setDebugLog] = useState([])
     const [deleteConfirm, setDeleteConfirm] = useState(false)
     const [safetyNumbers, setSafetyNumbers] = useState(null) // null | { display, loading }
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
+    const fileInputRef = useRef(null)
     const messagesRef = useRef([])
     const identityRef = useRef(identity)
     const refillInProgress = useRef(false)
@@ -132,7 +236,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
 
-                if (payload.type && payload.type !== "message") {
+                if (payload.type && payload.type !== "message" && payload.type !== "file") {
                     await deleteMessage(msg.id, initData).catch(() => {})
                     continue
                 }
@@ -144,7 +248,12 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     payload.senderInfo.ephemeralKey,
                 )
                 const { plaintext } = await decryptMessage(sessionState, payload.message)
-                decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                if (payload.type === "file") {
+                    const file = JSON.parse(plaintext)
+                    decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                } else {
+                    decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                }
                 pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
                 if (payload.senderInfo.oneTimePreKeyId) {
                     consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
@@ -227,6 +336,58 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     function handleKeyDown(e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
+    }
+
+    async function handleFileSelect(e) {
+        const file = e.target.files?.[0]
+        if (!file) return
+        e.target.value = ""
+
+        if (file.size > FILE_MAX_BYTES) {
+            setError(`File too large: ${formatFileSize(file.size)}. Max is 512 KB.`)
+            return
+        }
+
+        setSendingFile(true)
+        setError(null)
+        try {
+            const arrayBuffer = await file.arrayBuffer()
+            const compressedBuffer = await compressData(arrayBuffer)
+            const useCompressed = compressedBuffer.byteLength < arrayBuffer.byteLength
+            const dataBuffer = useCompressed ? compressedBuffer : arrayBuffer
+            const base64data = bufToBase64(dataBuffer)
+            pushDebug(`→ file ${formatFileSize(file.size)} → ${useCompressed ? formatFileSize(compressedBuffer.byteLength) + " compressed" : "no gain, raw"}`)
+
+            const filePayload = JSON.stringify({
+                name: file.name,
+                mimeType: file.type || "application/octet-stream",
+                size: file.size,
+                data: base64data,
+                compressed: useCompressed,
+            })
+
+            const optimisticFile = { name: file.name, mimeType: file.type, size: file.size, data: base64data, compressed: useCompressed }
+            updateMessages(mergeDedupe(messagesRef.current, [{
+                id: `me_${Date.now()}`, from: "me", file: optimisticFile, text: null,
+                timestamp: new Date().toISOString(),
+            }]))
+
+            const bundle = await fetchBundle(contactId, initData)
+            const otkPub = bundle.one_time_key?.public_key
+            pushDebug(`→ file otk:${otkPub?.slice(0, 8) ?? "null"}`)
+            const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
+                identityKey: bundle.identity_key,
+                signedPreKey: bundle.signed_pre_key,
+                oneTimePreKey: otkPub ?? null,
+            })
+            const { message } = await encryptMessage(sessionState, filePayload)
+            await sendMessage(contactId, JSON.stringify({ type: "file", senderInfo, message }), initData)
+            pushDebug(`→ file ok`)
+        } catch (e) {
+            setError(e.message)
+        } finally {
+            setSendingFile(false)
+        }
     }
 
     async function handleDeleteChat() {
@@ -349,13 +510,14 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                                     : "#1f2b38",
                                 border: msg.from === "me" ? "none" : "1px solid rgba(255,255,255,0.055)",
                                 borderRadius: msg.from === "me" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                                padding: "9px 13px", maxWidth: "78%", fontSize: 14, lineHeight: 1.5,
+                                padding: msg.file ? "10px 12px" : "9px 13px",
+                                maxWidth: "78%", fontSize: 14, lineHeight: 1.5,
                                 wordBreak: "break-word", color: "#e8f0f7",
                                 boxShadow: msg.from === "me"
                                     ? "0 2px 8px rgba(0,0,0,0.25)"
                                     : "0 1px 4px rgba(0,0,0,0.2)",
                             }}>
-                                {msg.text}
+                                {msg.file ? <FileCard file={msg.file} /> : msg.text}
                             </div>
                             <div style={{ fontSize: 11, color: "#708499", marginTop: 3, paddingLeft: 4, paddingRight: 4 }}>
                                 {parseTs(msg.timestamp) ? new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
@@ -380,6 +542,25 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             )}
 
             <div style={{ padding: "8px 10px 12px", background: "#1f2b38", borderTop: "1px solid rgba(42,58,74,0.7)", display: "flex", alignItems: "flex-end", gap: 8, flexShrink: 0, opacity: keysAvailable ? 1 : 0.45, pointerEvents: keysAvailable ? "auto" : "none" }}>
+                <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelect} />
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || sendingFile || !keysAvailable}
+                    title="Attach file (max 512 KB)"
+                    style={{
+                        width: 44, height: 44, borderRadius: "50%", border: "none", flexShrink: 0,
+                        background: "#2a3a4a", color: "#708499",
+                        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "background 0.12s, color 0.12s",
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.color = "#6ab3f3" }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "#708499" }}
+                >
+                    {sendingFile
+                        ? <Spinner size="s" />
+                        : <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                    }
+                </button>
                 <div style={{ flex: 1, background: "#17212b", borderRadius: 22, padding: "10px 16px", display: "flex", alignItems: "center", border: "1px solid rgba(255,255,255,0.055)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.2)" }}>
                     <input
                         ref={inputRef}
@@ -388,13 +569,13 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                         value={input}
                         onChange={e => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        disabled={sending || !keysAvailable}
+                        disabled={sending || sendingFile || !keysAvailable}
                         style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#e8f0f7", fontSize: 15, fontFamily: "inherit" }}
                     />
                 </div>
                 <button
                     onClick={handleSend}
-                    disabled={sending || !input.trim() || !keysAvailable}
+                    disabled={sending || sendingFile || !input.trim() || !keysAvailable}
                     className={`chat-send-btn${input.trim() && keysAvailable ? " active" : ""}`}
                     style={{
                         width: 44, height: 44, borderRadius: "50%", border: "none", flexShrink: 0,

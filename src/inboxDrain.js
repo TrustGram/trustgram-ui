@@ -37,7 +37,7 @@ export async function drainInbox(identity, storageKey, initData) {
         for (const msg of msgs) {
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
-                if (payload.type && payload.type !== "message") {
+                if (payload.type && payload.type !== "message" && payload.type !== "file") {
                     await deleteMessage(msg.id, initData).catch(() => {})
                     continue
                 }
@@ -48,7 +48,12 @@ export async function drainInbox(identity, storageKey, initData) {
                     payload.senderInfo.ephemeralKey,
                 )
                 const { plaintext } = await decryptMessage(sessionState, payload.message)
-                decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                if (payload.type === "file") {
+                    const file = JSON.parse(plaintext)
+                    decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                } else {
+                    decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                }
                 if (payload.senderInfo.oneTimePreKeyId) {
                     consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
                 }
