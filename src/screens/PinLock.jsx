@@ -8,8 +8,19 @@ const MAX_ATTEMPTS = 5
 const CSS = `
   .pin-root { scrollbar-width: none; }
   .pin-root::-webkit-scrollbar { display: none; }
+
   .pin-lock-icon { display: flex; }
   @media (max-height: 630px) { .pin-lock-icon { display: none !important; } }
+
+  /* Fluid numpad sizing — scales with viewport height */
+  .pin-numpad-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(7px, 1.5vh, 12px); }
+  .pin-numpad-btn  { width: clamp(60px, 11vh, 82px); height: clamp(60px, 11vh, 82px); }
+  .pin-numpad-fs   { font-size: clamp(20px, 4vh, 30px); }
+  .pin-numpad-del  { font-size: clamp(17px, 3.2vh, 22px); }
+  .pin-top         { padding-top: clamp(12px, 4vh, 32px); padding-bottom: clamp(6px, 1.5vh, 12px); }
+  .pin-dots-wrap   { margin: clamp(14px, 2.8vh, 32px) 0 clamp(10px, 2.2vh, 28px); }
+  .pin-err-wrap    { height: clamp(26px, 4vh, 34px); }
+
   @keyframes shake {
     0%,100%{ transform:translateX(0) }
     15%,45%,75%{ transform:translateX(-8px) }
@@ -38,10 +49,9 @@ const CSS = `
 
 function PinDots({ value, shake }) {
     return (
-        <div style={{
+        <div className="pin-dots-wrap" style={{
             display: "flex", gap: 20, justifyContent: "center",
             animation: shake ? "shake 0.5s" : "none",
-            margin: "32px 0 28px",
         }}>
             {Array.from({ length: PIN_LENGTH }, (_, i) => {
                 const filled = i < value.length
@@ -114,12 +124,11 @@ export default function PinLock({ onUnlock }) {
             {/* Top region: flex:1 centers content vertically when screen is tall enough.
                 minHeight:fit-content prevents the region from collapsing below content height,
                 so justifyContent:center never clips the icon at the top. */}
-            <div style={{
+            <div className="pin-top" style={{
                 flex: 1,
                 minHeight: "fit-content",
                 display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                width: "100%",
-                paddingTop: 32, paddingBottom: 12, boxSizing: "border-box",
+                width: "100%", boxSizing: "border-box",
             }}>
                 {/* Lock icon — hidden via CSS on viewports shorter than 630px */}
                 <div className="pin-lock-icon" style={{
@@ -146,7 +155,7 @@ export default function PinLock({ onUnlock }) {
 
                 <PinDots value={pin} shake={shake} />
 
-                <div style={{ height: 34, display: "flex", alignItems: "center" }}>
+                <div className="pin-err-wrap" style={{ display: "flex", alignItems: "center" }}>
                     {error && (
                         <div style={{
                             fontSize: 12.5, color: "#ff9090",
@@ -162,19 +171,17 @@ export default function PinLock({ onUnlock }) {
             {/* Numpad */}
             <div style={{
                 paddingBottom: "max(28px, env(safe-area-inset-bottom, 28px))",
-                paddingTop: 8,
-                flexShrink: 0,
+                paddingTop: 8, flexShrink: 0,
             }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                <div className="pin-numpad-grid">
                     {NUMPAD.map((d, i) => (
                         <button
                             key={i}
-                            className="pin-key"
+                            className={`pin-key pin-numpad-btn ${d === "⌫" ? "pin-numpad-del" : d ? "pin-numpad-fs" : ""}`}
                             onClick={() => handleDigit(d)}
                             disabled={!d || attempts >= MAX_ATTEMPTS}
                             style={{
-                                width: 82, height: 82, borderRadius: "50%",
-                                fontSize: d === "⌫" ? 22 : 30,
+                                borderRadius: "50%",
                                 fontWeight: d === "⌫" ? 400 : 300,
                                 border: "none",
                                 cursor: d ? "pointer" : "default",
