@@ -8,6 +8,8 @@ const MAX_ATTEMPTS = 5
 const CSS = `
   .pin-root { scrollbar-width: none; }
   .pin-root::-webkit-scrollbar { display: none; }
+  .pin-lock-icon { display: flex; }
+  @media (max-height: 520px) { .pin-lock-icon { display: none; } }
   @keyframes shake {
     0%,100%{ transform:translateX(0) }
     15%,45%,75%{ transform:translateX(-8px) }
@@ -116,14 +118,14 @@ export default function PinLock({ onUnlock }) {
                 width: "100%", minHeight: 0,
                 paddingTop: 24, paddingBottom: 8, boxSizing: "border-box",
             }}>
-                {/* Lock icon */}
-                <div style={{
+                {/* Lock icon — hidden on short screens via CSS */}
+                <div className="pin-lock-icon" style={{
                     animation: lockAnim ? "lockPulse 0.55s ease" : "none",
                     width: 96, height: 96, borderRadius: 30,
                     background: "linear-gradient(150deg, #213d5a 0%, #152d47 100%)",
                     border: "1px solid rgba(106,179,243,0.2)",
                     boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
+                    alignItems: "center", justifyContent: "center",
                     marginBottom: 24,
                 }}>
                     <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#6ab3f3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

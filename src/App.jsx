@@ -182,6 +182,7 @@ export default function App() {
 
     return (
         <ChatList
+            identity={identity}
             onOpenChat={setActiveChat}
             onResetKeys={handleResetKeys}
             onPinSettings={mode => setPinScreen(mode)}
