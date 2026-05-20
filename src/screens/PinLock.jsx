@@ -95,82 +95,92 @@ export default function PinLock({ onUnlock }) {
 
     return (
         <div style={{
-            minHeight: "100vh",
-            minHeight: "100dvh",
+            height: "100vh",
+            height: "100dvh",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
             background: "radial-gradient(ellipse 100% 70% at 50% 0%, #1c3550 0%, #17212b 55%)",
-            paddingTop: 56,
-            paddingBottom: "max(80px, env(safe-area-inset-bottom, 80px))",
             boxSizing: "border-box",
             userSelect: "none",
-            overflowY: "auto",
+            overflow: "hidden",
         }}>
             <style>{CSS}</style>
 
-            {/* Lock icon */}
+            {/* Top region — grows to fill space, content centered inside */}
             <div style={{
-                animation: lockAnim ? "lockPulse 0.55s ease" : "none",
-                width: 96, height: 96, borderRadius: 30,
-                background: "linear-gradient(150deg, #213d5a 0%, #152d47 100%)",
-                border: "1px solid rgba(106,179,243,0.2)",
-                boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                marginBottom: 24,
+                flex: 1,
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                width: "100%", minHeight: 0,
             }}>
-                <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#6ab3f3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2.5"/>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                </svg>
+                {/* Lock icon */}
+                <div style={{
+                    animation: lockAnim ? "lockPulse 0.55s ease" : "none",
+                    width: 96, height: 96, borderRadius: 30,
+                    background: "linear-gradient(150deg, #213d5a 0%, #152d47 100%)",
+                    border: "1px solid rgba(106,179,243,0.2)",
+                    boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    marginBottom: 24,
+                }}>
+                    <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#6ab3f3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2.5"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                </div>
+
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#e8f0f7", letterSpacing: "-0.5px" }}>
+                    TrustGram
+                </div>
+                <div style={{ fontSize: 14, color: "#708499", marginTop: 6, letterSpacing: "0.1px" }}>
+                    Enter your PIN to continue
+                </div>
+
+                <PinDots value={pin} shake={shake} />
+
+                <div style={{ height: 34, display: "flex", alignItems: "center" }}>
+                    {error && (
+                        <div style={{
+                            fontSize: 12.5, color: "#ff9090",
+                            background: "rgba(255,80,80,0.09)",
+                            border: "1px solid rgba(255,80,80,0.2)",
+                            borderRadius: 20, padding: "6px 16px",
+                            letterSpacing: "0.1px",
+                        }}>{error}</div>
+                    )}
+                </div>
             </div>
 
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#e8f0f7", letterSpacing: "-0.5px" }}>
-                TrustGram
-            </div>
-            <div style={{ fontSize: 14, color: "#708499", marginTop: 6, letterSpacing: "0.1px" }}>
-                Enter your PIN to continue
-            </div>
-
-            <PinDots value={pin} shake={shake} />
-
-            {/* Error message */}
-            <div style={{ height: 34, display: "flex", alignItems: "center", marginBottom: 20 }}>
-                {error && (
-                    <div style={{
-                        fontSize: 12.5, color: "#ff9090",
-                        background: "rgba(255,80,80,0.09)",
-                        border: "1px solid rgba(255,80,80,0.2)",
-                        borderRadius: 20, padding: "6px 16px",
-                        letterSpacing: "0.1px",
-                    }}>{error}</div>
-                )}
-            </div>
-
-            {/* Numpad */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                {NUMPAD.map((d, i) => (
-                    <button
-                        key={i}
-                        className="pin-key"
-                        onClick={() => handleDigit(d)}
-                        disabled={!d || attempts >= MAX_ATTEMPTS}
-                        style={{
-                            width: 82, height: 82, borderRadius: "50%",
-                            fontSize: d === "⌫" ? 22 : 30,
-                            fontWeight: d === "⌫" ? 400 : 300,
-                            border: "none",
-                            cursor: d ? "pointer" : "default",
-                            background: d ? "rgba(31,43,56,0.95)" : "transparent",
-                            color: d ? "#e8f0f7" : "transparent",
-                            boxShadow: d ? "0 3px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
-                            fontFamily: "inherit",
-                            opacity: attempts >= MAX_ATTEMPTS && d ? 0.4 : 1,
-                        }}
-                    >
-                        {d}
-                    </button>
-                ))}
+            {/* Numpad — fixed at bottom, safe-area aware */}
+            <div style={{
+                paddingBottom: "max(24px, env(safe-area-inset-bottom, 24px))",
+                paddingTop: 12,
+                flexShrink: 0,
+            }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                    {NUMPAD.map((d, i) => (
+                        <button
+                            key={i}
+                            className="pin-key"
+                            onClick={() => handleDigit(d)}
+                            disabled={!d || attempts >= MAX_ATTEMPTS}
+                            style={{
+                                width: 82, height: 82, borderRadius: "50%",
+                                fontSize: d === "⌫" ? 22 : 30,
+                                fontWeight: d === "⌫" ? 400 : 300,
+                                border: "none",
+                                cursor: d ? "pointer" : "default",
+                                background: d ? "rgba(31,43,56,0.95)" : "transparent",
+                                color: d ? "#e8f0f7" : "transparent",
+                                boxShadow: d ? "0 3px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
+                                fontFamily: "inherit",
+                                opacity: attempts >= MAX_ATTEMPTS && d ? 0.4 : 1,
+                            }}
+                        >
+                            {d}
+                        </button>
+                    ))}
+                </div>
             </div>
         </div>
     )
