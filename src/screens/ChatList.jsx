@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
-import { fetchInbox, fetchBundle, fetchBundleByUsername, fetchOTKCount } from "../api"
+import { fetchInbox, fetchBundle, fetchBundleByUsername } from "../api"
 import { saveContact, getContacts, getContactName } from "../contacts"
 import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
@@ -67,8 +67,6 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
     const [chatExport, setChatExport] = useState(null)
     const [exportCopied, setExportCopied] = useState(false)
     const [verifyOpen, setVerifyOpen] = useState(false)
-    const [keyInfoOpen, setKeyInfoOpen] = useState(false)
-    const [otkCount, setOtkCount] = useState(null)
     const settingsRef = useRef(null)
 
     const commitHash = typeof __COMMIT_HASH__ !== "undefined" ? __COMMIT_HASH__ : "unknown"
@@ -76,18 +74,6 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
     const repoUrl = import.meta.env.VITE_REPO_URL || null
     const cryptoRepoUrl = import.meta.env.VITE_CRYPTO_REPO_URL || null
     const commitUrl = repoUrl ? `${repoUrl}/commit/${commitHash}` : null
-
-    async function openKeyInfo() {
-        setSettingsOpen(false)
-        setKeyInfoOpen(true)
-        setOtkCount(null)
-        try {
-            const { count } = await fetchOTKCount(getInitData())
-            setOtkCount(count)
-        } catch {
-            setOtkCount(-1)
-        }
-    }
 
     function openExternal(url) {
         if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(url)
@@ -295,64 +281,6 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
                 </div>
             )}
 
-            {keyInfoOpen && (() => {
-                const lastRotated = parseInt(localStorage.getItem("tg_spk_rotated_at") || "0", 10)
-                const spkDays = lastRotated ? Math.floor((Date.now() - lastRotated) / 86400000) : null
-                const spkLabel = spkDays === null ? "Unknown" : spkDays === 0 ? "Today" : `${spkDays} day${spkDays !== 1 ? "s" : ""} ago`
-                const otkStatus = otkCount === null ? null : otkCount === -1 ? "Error" : otkCount
-                const otkColor = otkCount === null ? "#708499" : otkCount === -1 ? "#ff8888" : otkCount < 5 ? "#ffaa44" : "#4dc878"
-
-                return (
-                    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={() => setKeyInfoOpen(false)}>
-                        <div style={{ background: "#1f2b38", borderRadius: 16, padding: "24px 20px", maxWidth: 320, width: "100%" }} onClick={e => e.stopPropagation()}>
-
-                            <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 18, color: "#e8f0f7", display: "flex", alignItems: "center", gap: 8 }}>
-                                🔑 Key Info
-                            </div>
-
-                            {/* OTK */}
-                            <div style={{ background: "#17212b", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                                    <span style={{ fontSize: 13, fontWeight: 600, color: "#a0b8cc" }}>One-time keys (OTK)</span>
-                                    <span style={{ fontSize: 14, fontWeight: 700, color: otkColor, fontFamily: "monospace" }}>
-                                        {otkCount === null ? <Spinner size="s" /> : otkStatus}
-                                    </span>
-                                </div>
-                                <div style={{ fontSize: 11, color: "#4a6070", lineHeight: 1.4 }}>
-                                    Consumed per message. Auto-refills when below 5.
-                                    {otkCount !== null && otkCount !== -1 && otkCount < 5 && (
-                                        <span style={{ color: "#ffaa44", display: "block", marginTop: 3 }}>⚠ Low — app will refill on next launch</span>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* SPK */}
-                            <div style={{ background: "#17212b", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                                    <span style={{ fontSize: 13, fontWeight: 600, color: "#a0b8cc" }}>Signed pre-key (SPK)</span>
-                                    <span style={{ fontSize: 12, color: spkDays !== null && spkDays >= 7 ? "#ffaa44" : "#4dc878" }}>{spkLabel}</span>
-                                </div>
-                                <div style={{ fontSize: 11, color: "#4a6070", lineHeight: 1.4 }}>
-                                    Rotates every 7 days on startup. Protects past sessions if long-term keys leak.
-                                </div>
-                            </div>
-
-                            {/* IK */}
-                            <div style={{ background: "#17212b", borderRadius: 10, padding: "12px 14px", marginBottom: 18 }}>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: "#a0b8cc", marginBottom: 4 }}>Identity key (IK)</div>
-                                <div style={{ fontSize: 11, color: "#4a6070", lineHeight: 1.4 }}>
-                                    Permanent — your cryptographic identity. Changing it resets Safety Numbers with all contacts.
-                                </div>
-                            </div>
-
-                            <button onClick={() => setKeyInfoOpen(false)} style={{ width: "100%", padding: "10px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-                                Close
-                            </button>
-                        </div>
-                    </div>
-                )
-            })()}
-
             {chatExport?.state === "error" && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
                     <div style={{ background: "#1f2b38", borderRadius: 16, padding: "24px", maxWidth: 300, width: "100%", textAlign: "center" }}>
@@ -400,7 +328,6 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
 
                             {/* Keys */}
                             <div style={{ padding: "4px 12px 2px", fontSize: 10, color: "#4a6070", fontWeight: 700, letterSpacing: "0.8px", textTransform: "uppercase" }}>Keys</div>
-                            <MenuItem icon="🔑" label="Key info" onClick={openKeyInfo} />
                             <MenuItem icon="🗑️" label="Reset keys" onClick={() => { setSettingsOpen(false); onResetKeys() }} danger />
 
                         </div>
@@ -456,6 +383,16 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
                     ))}
                 </div>
             )}
+
+            <div style={{ padding: "10px 16px", borderTop: "1px solid rgba(42,58,74,0.7)", background: "#1f2b38", flexShrink: 0, display: "flex", justifyContent: "center" }}>
+                <button
+                    onClick={onImport}
+                    style={{ padding: "7px 18px", borderRadius: 20, border: "none", background: "linear-gradient(135deg, #2d5a8a 0%, #1e3f6e 100%)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 2px 8px rgba(0,0,0,0.25)" }}
+                >
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Import
+                </button>
+            </div>
 
             <Modal
                 open={newChatOpen}

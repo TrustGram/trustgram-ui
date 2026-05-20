@@ -9,7 +9,7 @@ const CSS = `
   .pin-root { scrollbar-width: none; }
   .pin-root::-webkit-scrollbar { display: none; }
   .pin-lock-icon { display: flex; }
-  @media (max-height: 520px) { .pin-lock-icon { display: none; } }
+  @media (max-height: 630px) { .pin-lock-icon { display: none !important; } }
   @keyframes shake {
     0%,100%{ transform:translateX(0) }
     15%,45%,75%{ transform:translateX(-8px) }
@@ -99,8 +99,8 @@ export default function PinLock({ onUnlock }) {
 
     return (
         <div className="pin-root" style={{
-            height: "100vh",
-            height: "100dvh",
+            minHeight: "100vh",
+            minHeight: "100dvh",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -111,21 +111,24 @@ export default function PinLock({ onUnlock }) {
         }}>
             <style>{CSS}</style>
 
-            {/* Top region — flex:1 pushes numpad to bottom; paddingTop prevents icon from touching edge */}
+            {/* Top region: flex:1 centers content vertically when screen is tall enough.
+                minHeight:fit-content prevents the region from collapsing below content height,
+                so justifyContent:center never clips the icon at the top. */}
             <div style={{
                 flex: 1,
+                minHeight: "fit-content",
                 display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                width: "100%", minHeight: 0,
-                paddingTop: 24, paddingBottom: 8, boxSizing: "border-box",
+                width: "100%",
+                paddingTop: 32, paddingBottom: 12, boxSizing: "border-box",
             }}>
-                {/* Lock icon — hidden on short screens via CSS */}
+                {/* Lock icon — hidden via CSS on viewports shorter than 630px */}
                 <div className="pin-lock-icon" style={{
                     animation: lockAnim ? "lockPulse 0.55s ease" : "none",
                     width: 96, height: 96, borderRadius: 30,
                     background: "linear-gradient(150deg, #213d5a 0%, #152d47 100%)",
                     border: "1px solid rgba(106,179,243,0.2)",
                     boxShadow: "0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07)",
-                    alignItems: "center", justifyContent: "center",
+                    display: "flex", alignItems: "center", justifyContent: "center",
                     marginBottom: 24,
                 }}>
                     <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="#6ab3f3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -156,10 +159,10 @@ export default function PinLock({ onUnlock }) {
                 </div>
             </div>
 
-            {/* Numpad — fixed at bottom, safe-area aware */}
+            {/* Numpad */}
             <div style={{
-                paddingBottom: "max(24px, env(safe-area-inset-bottom, 24px))",
-                paddingTop: 12,
+                paddingBottom: "max(28px, env(safe-area-inset-bottom, 28px))",
+                paddingTop: 8,
                 flexShrink: 0,
             }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
