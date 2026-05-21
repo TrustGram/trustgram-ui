@@ -5,6 +5,7 @@ import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { consumeOTK, getOtkLastCheck, setOtkLastCheck } from "../storage"
 import { refillIfLow } from "../keyHealth"
+import { withRatchetLock, clearRatchet } from "../ratchetStore"
 
 const FILE_MAX_BYTES = 512 * 1024 // 512 KB
 
@@ -338,45 +339,94 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         if (msgs.length > 0) pushDebug(`inbox: ${msgs.length} msg, mine: ${mine.length}`)
         const decrypted = []
 
-        for (const msg of mine) {
-            const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 8) ?? "null" } catch { return "?" } })()
-            try {
-                const payload = JSON.parse(msg.encrypted_payload)
+        // Process every incoming message under a single ratchet lock so the
+        // chain key advances exactly once per message and concurrent polls /
+        // tabs can't race.
+        await withRatchetLock(contactId, async (initialState) => {
+            let state = initialState
+            for (const msg of mine) {
+                const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 8) ?? "null" } catch { return "?" } })()
+                try {
+                    const payload = JSON.parse(msg.encrypted_payload)
 
-                if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
+                    if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
+                        await deleteMessage(msg.id, initData).catch(() => {})
+                        continue
+                    }
+
+                    // First message of a session — receiver bootstraps via X3DH.
+                    // Subsequent messages reuse the saved state.
+                    //
+                    // If senderInfo is present but we already have state, we
+                    // still accept the new X3DH (sender may have lost state
+                    // and is starting fresh) — fall back if normal decrypt
+                    // fails. For now: trust senderInfo only when state is null.
+                    if (!state) {
+                        if (!payload.senderInfo) {
+                            throw new Error("No session state and no senderInfo")
+                        }
+                        state = await acceptSession(
+                            identityRef.current,
+                            payload.senderInfo.oneTimePreKeyId,
+                            payload.senderInfo.identityKey,
+                            payload.senderInfo.ephemeralKey,
+                        )
+                        if (payload.senderInfo.oneTimePreKeyId) {
+                            consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                        }
+                    }
+
+                    let plaintext
+                    let nextState
+                    try {
+                        const res = await decryptMessage(state, payload.message)
+                        plaintext = res.plaintext
+                        nextState = res.state
+                    } catch (decryptErr) {
+                        // If we have state but it doesn't work and the message
+                        // carries a senderInfo (sender restarted session),
+                        // bootstrap from scratch and retry once.
+                        if (payload.senderInfo) {
+                            pushDebug(`↻ resync #${msg.id} (state mismatch)`)
+                            state = await acceptSession(
+                                identityRef.current,
+                                payload.senderInfo.oneTimePreKeyId,
+                                payload.senderInfo.identityKey,
+                                payload.senderInfo.ephemeralKey,
+                            )
+                            if (payload.senderInfo.oneTimePreKeyId) {
+                                consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                            }
+                            const res = await decryptMessage(state, payload.message)
+                            plaintext = res.plaintext
+                            nextState = res.state
+                        } else {
+                            throw decryptErr
+                        }
+                    }
+                    state = nextState
+
+                    if (payload.type === "file") {
+                        const file = JSON.parse(plaintext)
+                        decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                    } else if (payload.type === "message_zip") {
+                        const text = await decompressText(plaintext)
+                        decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
+                    } else {
+                        decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                    }
+                    pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
+                    await deleteMessage(msg.id, initData).catch(e => pushDebug(`del fail #${msg.id}: ${e.message?.slice(0, 30)}`))
+                    maybeRefillOTKs().catch(() => {})
+                } catch (err) {
+                    console.error("[TrustGram] decrypt failed for msg", msg.id, "otk:", otkSnippet, err?.message, err)
+                    pushDebug(`✗ decrypt #${msg.id} otk:${otkSnippet} err:${err?.message?.slice(0, 40)}`)
+                    decrypted.push({ id: msg.id, from: "them", text: `🔒 [не удалось расшифровать: ${err?.message?.slice(0, 50) ?? "?"}]`, timestamp: msg.timestamp })
                     await deleteMessage(msg.id, initData).catch(() => {})
-                    continue
                 }
-
-                const sessionState = await acceptSession(
-                    identityRef.current,
-                    payload.senderInfo.oneTimePreKeyId,
-                    payload.senderInfo.identityKey,
-                    payload.senderInfo.ephemeralKey,
-                )
-                const { plaintext } = await decryptMessage(sessionState, payload.message)
-                if (payload.type === "file") {
-                    const file = JSON.parse(plaintext)
-                    decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
-                } else if (payload.type === "message_zip") {
-                    const text = await decompressText(plaintext)
-                    decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
-                } else {
-                    decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
-                }
-                pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
-                if (payload.senderInfo.oneTimePreKeyId) {
-                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                }
-                await deleteMessage(msg.id, initData).catch(e => pushDebug(`del fail #${msg.id}: ${e.message?.slice(0, 30)}`))
-                maybeRefillOTKs().catch(() => {})
-            } catch (err) {
-                console.error("[TrustGram] decrypt failed for msg", msg.id, "otk:", otkSnippet, err?.message, err)
-                pushDebug(`✗ decrypt #${msg.id} otk:${otkSnippet} err:${err?.message?.slice(0, 40)}`)
-                decrypted.push({ id: msg.id, from: "them", text: `🔒 [не удалось расшифровать: ${err?.message?.slice(0, 50) ?? "?"}]`, timestamp: msg.timestamp })
-                await deleteMessage(msg.id, initData).catch(() => {})
             }
-        }
+            return state  // persisted by withRatchetLock
+        })
         return decrypted
     }
 
@@ -430,20 +480,40 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             }])
             updateMessages(optimistic)
 
-            const bundle = await fetchBundle(contactId, initData)
-            const otkPub = bundle.one_time_key?.public_key
-            pushDebug(`→ send otk:${otkPub?.slice(0, 8) ?? "null"}`)
-            const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
-                identityKey: bundle.identity_key,
-                signingKey: bundle.signing_key,
-                signedPreKey: bundle.signed_pre_key,
-                signedPreKeySignature: bundle.signature,
-                oneTimePreKey: otkPub ?? null,
-            })
             const { plaintext: bodyText, type } = await maybeCompressText(text)
-            const { message } = await encryptMessage(sessionState, bodyText)
-            await sendMessage(contactId, JSON.stringify({ type, senderInfo, message }), initData)
-            pushDebug(`→ send ok${type === "message_zip" ? " (zip)" : ""}`)
+
+            // Encrypt under the ratchet lock so concurrent sends serialize and
+            // both halves of the wire format come from the same advancing chain.
+            await withRatchetLock(contactId, async (existingState) => {
+                let state = existingState
+                let senderInfo = null
+
+                if (!state) {
+                    // First message — do X3DH. Subsequent messages skip this.
+                    const bundle = await fetchBundle(contactId, initData)
+                    const otkPub = bundle.one_time_key?.public_key
+                    pushDebug(`→ send X3DH otk:${otkPub?.slice(0, 8) ?? "null"}`)
+                    const init = await initiateSession(identityRef.current, {
+                        identityKey: bundle.identity_key,
+                        signingKey: bundle.signing_key,
+                        signedPreKey: bundle.signed_pre_key,
+                        signedPreKeySignature: bundle.signature,
+                        oneTimePreKey: otkPub ?? null,
+                    })
+                    state = init.state
+                    senderInfo = init.senderInfo
+                } else {
+                    pushDebug(`→ send (existing session)`)
+                }
+
+                const { message, state: nextState } = await encryptMessage(state, bodyText)
+                const wire = senderInfo
+                    ? { type, senderInfo, message }
+                    : { type, message }
+                await sendMessage(contactId, JSON.stringify(wire), initData)
+                pushDebug(`→ send ok${type === "message_zip" ? " (zip)" : ""}`)
+                return nextState
+            })
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
@@ -504,19 +574,33 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 timestamp: new Date().toISOString(),
             }]))
 
-            const bundle = await fetchBundle(contactId, initData)
-            const otkPub = bundle.one_time_key?.public_key
-            pushDebug(`→ file otk:${otkPub?.slice(0, 8) ?? "null"}`)
-            const { state: sessionState, senderInfo } = await initiateSession(identityRef.current, {
-                identityKey: bundle.identity_key,
-                signingKey: bundle.signing_key,
-                signedPreKey: bundle.signed_pre_key,
-                signedPreKeySignature: bundle.signature,
-                oneTimePreKey: otkPub ?? null,
+            await withRatchetLock(contactId, async (existingState) => {
+                let state = existingState
+                let senderInfo = null
+                if (!state) {
+                    const bundle = await fetchBundle(contactId, initData)
+                    const otkPub = bundle.one_time_key?.public_key
+                    pushDebug(`→ file X3DH otk:${otkPub?.slice(0, 8) ?? "null"}`)
+                    const init = await initiateSession(identityRef.current, {
+                        identityKey: bundle.identity_key,
+                        signingKey: bundle.signing_key,
+                        signedPreKey: bundle.signed_pre_key,
+                        signedPreKeySignature: bundle.signature,
+                        oneTimePreKey: otkPub ?? null,
+                    })
+                    state = init.state
+                    senderInfo = init.senderInfo
+                } else {
+                    pushDebug(`→ file (existing session)`)
+                }
+                const { message, state: nextState } = await encryptMessage(state, filePayload)
+                const wire = senderInfo
+                    ? { type: "file", senderInfo, message }
+                    : { type: "file", message }
+                await sendMessage(contactId, JSON.stringify(wire), initData)
+                pushDebug(`→ file ok`)
+                return nextState
             })
-            const { message } = await encryptMessage(sessionState, filePayload)
-            await sendMessage(contactId, JSON.stringify({ type: "file", senderInfo, message }), initData)
-            pushDebug(`→ file ok`)
         } catch (e) {
             console.error("[TrustGram] file send failed:", e)
             pushDebug(`✗ file: ${e?.message?.slice(0, 50) ?? "?"}`)
@@ -533,6 +617,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     async function handleDeleteChat() {
         clearMessages(contactId)
+        // Drop the ratchet state too — otherwise re-adding the contact would
+        // try to decrypt their new initial X3DH against a stale session.
+        clearRatchet(contactId).catch(() => {})
         onBack()
     }
 

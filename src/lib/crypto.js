@@ -38,14 +38,19 @@ async function deriveBits(privateKey, publicKey) {
     256
   );
 }
-async function hkdf(inputKey, salt, info, length = 32) {
-  const key = await crypto.subtle.importKey(
+async function importHkdfKey(bytes) {
+  return crypto.subtle.importKey("raw", bytes, "HKDF", false, ["deriveBits"]);
+}
+async function importMessageKey(bytes) {
+  return crypto.subtle.importKey(
     "raw",
-    inputKey,
-    "HKDF",
+    bytes,
+    { name: "AES-GCM", length: 256 },
     false,
-    ["deriveBits"]
+    ["encrypt", "decrypt"]
   );
+}
+async function deriveHkdfBytes(inputKey, salt, info, length) {
   return crypto.subtle.deriveBits(
     {
       name: "HKDF",
@@ -53,29 +58,35 @@ async function hkdf(inputKey, salt, info, length = 32) {
       salt,
       info: new TextEncoder().encode(info)
     },
-    key,
+    inputKey,
     length * 8
   );
 }
-async function hkdfExpand(inputKey, salt, info) {
-  const output = await hkdf(inputKey, salt, info, 64);
-  return {
-    key1: output.slice(0, 32),
-    key2: output.slice(32, 64)
-  };
+async function hkdf(inputKey, salt, info, length = 32) {
+  const key = await importHkdfKey(inputKey);
+  return deriveHkdfBytes(key, salt, info, length);
 }
-async function importAESKey(raw) {
-  return crypto.subtle.importKey(
-    "raw",
-    raw,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
+async function expandToTwoKeys(inputKey, salt, info) {
+  const hkdfKey = inputKey instanceof ArrayBuffer ? await importHkdfKey(inputKey) : inputKey;
+  const raw = await deriveHkdfBytes(hkdfKey, salt, info, 64);
+  const view = new Uint8Array(raw);
+  const key1 = await importHkdfKey(view.slice(0, 32).buffer);
+  const key2 = await importHkdfKey(view.slice(32, 64).buffer);
+  view.fill(0);
+  return { key1, key2 };
 }
-async function aesEncrypt(keyBytes, plaintext) {
+async function advanceChainStep(chainKey) {
+  const salt = new Uint8Array(32).fill(0).buffer;
+  const mkBytes = await deriveHkdfBytes(chainKey, salt, "TrustGram_MessageKey_v1", 32);
+  const ckBytes = await deriveHkdfBytes(chainKey, salt, "TrustGram_ChainKey_v1", 32);
+  const messageKey = await importMessageKey(mkBytes);
+  const nextChainKey = await importHkdfKey(ckBytes);
+  new Uint8Array(mkBytes).fill(0);
+  new Uint8Array(ckBytes).fill(0);
+  return { messageKey, nextChainKey };
+}
+async function aesEncrypt(key, plaintext) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await importAESKey(keyBytes);
   const encoded = new TextEncoder().encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
@@ -87,8 +98,7 @@ async function aesEncrypt(keyBytes, plaintext) {
     ciphertext: toBase64(ciphertext)
   };
 }
-async function aesDecrypt(keyBytes, iv, ciphertext) {
-  const key = await importAESKey(keyBytes);
+async function aesDecrypt(key, iv, ciphertext) {
   const decrypted = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: fromBase64(iv) },
     key,
@@ -236,7 +246,7 @@ async function initSenderRatchet(masterSecret, theirPublicKeyB64) {
   const dhSendKey = await generateKeyPair();
   const theirPub = await importPublicKey(theirPublicKeyB64);
   const dh = await deriveBits(dhSendKey.privateKey, theirPub);
-  const { key1: rootKey, key2: sendChainKey } = await hkdfExpand(
+  const { key1: rootKey, key2: sendChainKey } = await expandToTwoKeys(
     masterSecret,
     dh,
     "TrustGram_Ratchet_v1"
@@ -254,10 +264,11 @@ async function initSenderRatchet(masterSecret, theirPublicKeyB64) {
   };
 }
 async function initReceiverRatchet(masterSecret, spkKeyPair) {
+  const rootKey = await importHkdfKey(masterSecret);
   return {
     dhSendKey: spkKeyPair,
     dhRecvKey: null,
-    rootKey: masterSecret,
+    rootKey,
     sendChainKey: null,
     recvChainKey: null,
     sendCount: 0,
@@ -267,7 +278,10 @@ async function initReceiverRatchet(masterSecret, spkKeyPair) {
   };
 }
 async function ratchetEncrypt(state, plaintext) {
-  const { messageKey, nextChainKey } = await advanceChain(state.sendChainKey);
+  if (!state.sendChainKey) {
+    throw new Error("Cannot encrypt: no sending chain key (call dhRatchetStep first)");
+  }
+  const { messageKey, nextChainKey } = await advanceChainStep(state.sendChainKey);
   const dhPub = await exportPublicKey(state.dhSendKey.publicKey);
   const { iv, ciphertext } = await aesEncrypt(messageKey, plaintext);
   const message = {
@@ -304,7 +318,10 @@ async function ratchetDecrypt(state, message) {
     currentState = await dhRatchetStep(currentState, theirDhPub);
   }
   currentState = await skipMessageKeys(currentState, message.n);
-  const { messageKey, nextChainKey } = await advanceChain(currentState.recvChainKey);
+  if (!currentState.recvChainKey) {
+    throw new Error("Receiving chain key is unexpectedly null after DH ratchet");
+  }
+  const { messageKey, nextChainKey } = await advanceChainStep(currentState.recvChainKey);
   const plaintext = await aesDecrypt(messageKey, message.iv, message.ciphertext);
   const nextState = {
     ...currentState,
@@ -315,14 +332,14 @@ async function ratchetDecrypt(state, message) {
 }
 async function dhRatchetStep(state, theirPub) {
   const dh1 = await deriveBits(state.dhSendKey.privateKey, theirPub);
-  const { key1: rootKey1, key2: recvChainKey } = await hkdfExpand(
+  const { key1: rootKey1, key2: recvChainKey } = await expandToTwoKeys(
     state.rootKey,
     dh1,
     "TrustGram_Ratchet_v1"
   );
   const newDhSendKey = await generateKeyPair();
   const dh2 = await deriveBits(newDhSendKey.privateKey, theirPub);
-  const { key1: rootKey2, key2: sendChainKey } = await hkdfExpand(
+  const { key1: rootKey2, key2: sendChainKey } = await expandToTwoKeys(
     rootKey1,
     dh2,
     "TrustGram_Ratchet_v1"
@@ -339,12 +356,6 @@ async function dhRatchetStep(state, theirPub) {
     recvCount: 0
   };
 }
-async function advanceChain(chainKey) {
-  const salt = new Uint8Array(32).fill(0).buffer;
-  const messageKey = await hkdf(chainKey, salt, "TrustGram_MessageKey_v1");
-  const nextChainKey = await hkdf(chainKey, salt, "TrustGram_ChainKey_v1");
-  return { messageKey, nextChainKey };
-}
 async function skipMessageKeys(state, until) {
   if (until - state.recvCount > MAX_SKIP) {
     throw new Error("Too many skipped messages");
@@ -352,10 +363,10 @@ async function skipMessageKeys(state, until) {
   let chainKey = state.recvChainKey;
   const skippedKeys = [...state.skippedKeys];
   let recvCount = state.recvCount;
-  while (recvCount < until) {
-    const { messageKey, nextChainKey } = await advanceChain(chainKey);
+  while (recvCount < until && chainKey) {
+    const { messageKey, nextChainKey } = await advanceChainStep(chainKey);
     skippedKeys.push({
-      dhKey: await exportPublicKey(state.dhRecvKey),
+      dhKey: state.dhRecvKey ? await exportPublicKey(state.dhRecvKey) : "",
       n: recvCount,
       messageKey
     });

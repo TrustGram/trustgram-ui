@@ -2,6 +2,7 @@ import { acceptSession, decryptMessage } from "./crypto"
 import { fetchInbox, deleteMessage } from "./api"
 import { loadMessages, saveMessages } from "./messageStore"
 import { consumeOTK } from "./storage"
+import { withRatchetLock } from "./ratchetStore"
 
 async function decompressText(b64) {
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
@@ -59,35 +60,75 @@ export async function drainInbox(identity, storageKey, initData) {
         const senderId = parseInt(senderIdStr, 10)
         const decrypted = []
 
-        for (const msg of msgs) {
-            try {
-                const payload = JSON.parse(msg.encrypted_payload)
-                if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
-                    await deleteMessage(msg.id, initData).catch(() => {})
-                    continue
-                }
-                const sessionState = await acceptSession(
-                    identity,
-                    payload.senderInfo.oneTimePreKeyId,
-                    payload.senderInfo.identityKey,
-                    payload.senderInfo.ephemeralKey,
-                )
-                const { plaintext } = await decryptMessage(sessionState, payload.message)
-                if (payload.type === "file") {
-                    const file = JSON.parse(plaintext)
-                    decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
-                } else if (payload.type === "message_zip") {
-                    const text = await decompressText(plaintext)
-                    decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
-                } else {
-                    decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
-                }
-                if (payload.senderInfo.oneTimePreKeyId) {
-                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                }
-            } catch {}
-            await deleteMessage(msg.id, initData).catch(() => {})
-        }
+        // Mirror Chat.jsx: drive the ratchet from persisted state, falling back
+        // to X3DH only on the first message of a session.
+        await withRatchetLock(senderId, async (initialState) => {
+            let state = initialState
+            for (const msg of msgs) {
+                try {
+                    const payload = JSON.parse(msg.encrypted_payload)
+                    if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
+                        await deleteMessage(msg.id, initData).catch(() => {})
+                        continue
+                    }
+
+                    if (!state) {
+                        if (!payload.senderInfo) {
+                            await deleteMessage(msg.id, initData).catch(() => {})
+                            continue
+                        }
+                        state = await acceptSession(
+                            identity,
+                            payload.senderInfo.oneTimePreKeyId,
+                            payload.senderInfo.identityKey,
+                            payload.senderInfo.ephemeralKey,
+                        )
+                        if (payload.senderInfo.oneTimePreKeyId) {
+                            consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                        }
+                    }
+
+                    let plaintext
+                    let nextState
+                    try {
+                        const res = await decryptMessage(state, payload.message)
+                        plaintext = res.plaintext
+                        nextState = res.state
+                    } catch (e) {
+                        if (payload.senderInfo) {
+                            // Re-bootstrap (sender restarted session)
+                            state = await acceptSession(
+                                identity,
+                                payload.senderInfo.oneTimePreKeyId,
+                                payload.senderInfo.identityKey,
+                                payload.senderInfo.ephemeralKey,
+                            )
+                            if (payload.senderInfo.oneTimePreKeyId) {
+                                consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                            }
+                            const res = await decryptMessage(state, payload.message)
+                            plaintext = res.plaintext
+                            nextState = res.state
+                        } else {
+                            throw e
+                        }
+                    }
+                    state = nextState
+
+                    if (payload.type === "file") {
+                        const file = JSON.parse(plaintext)
+                        decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                    } else if (payload.type === "message_zip") {
+                        const text = await decompressText(plaintext)
+                        decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
+                    } else {
+                        decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
+                    }
+                } catch {}
+                await deleteMessage(msg.id, initData).catch(() => {})
+            }
+            return state
+        })
 
         if (decrypted.length > 0 && storageKey) {
             const existing = await loadMessages(senderId, storageKey)

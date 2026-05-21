@@ -4,11 +4,12 @@
 // modules would cause VersionError races.
 
 const DB_NAME = "trustgram"
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 export const STORES = {
     IDENTITY: "identity",
     MESSAGES: "messages",
+    RATCHET: "ratchet",
 }
 
 export function openDB() {
@@ -16,10 +17,11 @@ export function openDB() {
         const req = indexedDB.open(DB_NAME, DB_VERSION)
         req.onupgradeneeded = e => {
             const db = e.target.result
-            // v1 created `identity`; v2 added `messages`. createObjectStore
-            // throws if the store already exists, so always guard.
+            // v1 created `identity`; v2 added `messages`; v3 added `ratchet`.
+            // createObjectStore throws if the store already exists, so always guard.
             if (!db.objectStoreNames.contains(STORES.IDENTITY)) db.createObjectStore(STORES.IDENTITY)
             if (!db.objectStoreNames.contains(STORES.MESSAGES)) db.createObjectStore(STORES.MESSAGES)
+            if (!db.objectStoreNames.contains(STORES.RATCHET)) db.createObjectStore(STORES.RATCHET)
         }
         req.onsuccess = e => resolve(e.target.result)
         req.onerror = e => reject(e.target.error)
