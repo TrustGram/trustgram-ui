@@ -5,8 +5,11 @@ import { bindStorageKeyToPin, rebindStorageKeyToPin, unbindStorageKeyFromPin, un
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
 const PIN_LENGTH = 4
 
+// Note: the "Immediately" option still has a small grace window (~5s) so the
+// system file picker / share sheet / OS permission prompts don't trigger a
+// lock-and-PIN-prompt cycle every time the user attaches a file. See App.jsx.
 const INTERVALS = [
-    { label: "Immediately", value: 0 },
+    { label: "When I leave (5 sec)", value: 0 },
     { label: "After 1 minute", value: 60_000 },
     { label: "After 5 minutes", value: 300_000 },
     { label: "After 30 minutes", value: 1_800_000 },

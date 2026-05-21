@@ -150,28 +150,71 @@ export default function App() {
             updateLastActivity()
         }
 
-        const checkLock = () => {
+        // Grace period before "lock immediately" actually fires. The OS file
+        // picker, share sheet, photo permission prompt, and even tapping into
+        // the OS keyboard all flip document.hidden — without a grace window the
+        // user gets PIN-prompted any time they pick a file. 5s covers all those
+        // cases while still locking if they actually leave to a different app.
+        const VISIBILITY_GRACE_MS = 5000
+        let pendingLockTimer = null
+        let hiddenSince = null
+
+        const doLock = () => {
+            // Drop the in-RAM key so a memory dump after lock can't see it.
+            setStorageKey(null)
+            setStorageKeyBytes(null)
+            setLocked(true)
+        }
+
+        const onVisibilityChange = () => {
             if (!hasPin()) return
             const interval = getLockInterval()
             if (interval === null) return
-            if (interval === 0 || Date.now() - lastActivityRef.current >= interval) {
-                // Drop the in-RAM key so a memory dump after lock can't see it.
-                setStorageKey(null)
-                setStorageKeyBytes(null)
-                setLocked(true)
+
+            if (document.visibilityState === "hidden") {
+                hiddenSince = Date.now()
+                if (pendingLockTimer) clearTimeout(pendingLockTimer)
+                // Wait at least the grace window. For larger intervals we wait
+                // the full interval — same effect as the old immediate check
+                // but without locking on a 1-second app switch.
+                const delay = Math.max(VISIBILITY_GRACE_MS, interval)
+                pendingLockTimer = setTimeout(() => {
+                    pendingLockTimer = null
+                    if (document.visibilityState === "hidden") doLock()
+                }, delay)
+            } else {
+                // Returned to foreground. Cancel pending timer; mobile WebViews
+                // suspend our JS while backgrounded so the timer above might
+                // not have fired even after the interval has elapsed — catch
+                // up here by comparing wall-clock elapsed time.
+                if (pendingLockTimer) {
+                    clearTimeout(pendingLockTimer)
+                    pendingLockTimer = null
+                }
+                if (hiddenSince !== null) {
+                    const elapsed = Date.now() - hiddenSince
+                    hiddenSince = null
+                    const threshold = Math.max(VISIBILITY_GRACE_MS, interval)
+                    if (elapsed >= threshold) doLock()
+                }
             }
         }
 
         document.addEventListener("click", resetActivity)
         document.addEventListener("touchstart", resetActivity)
         document.addEventListener("keydown", resetActivity)
-        document.addEventListener("visibilitychange", checkLock)
+        document.addEventListener("visibilitychange", onVisibilityChange)
+        // pagehide is more reliable on iOS Safari WebView than visibilitychange,
+        // which sometimes fires late. Treat them the same.
+        window.addEventListener("pagehide", onVisibilityChange)
 
         return () => {
+            if (pendingLockTimer) clearTimeout(pendingLockTimer)
             document.removeEventListener("click", resetActivity)
             document.removeEventListener("touchstart", resetActivity)
             document.removeEventListener("keydown", resetActivity)
-            document.removeEventListener("visibilitychange", checkLock)
+            document.removeEventListener("visibilitychange", onVisibilityChange)
+            window.removeEventListener("pagehide", onVisibilityChange)
         }
     }, [])
 

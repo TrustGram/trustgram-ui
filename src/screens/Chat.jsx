@@ -84,6 +84,8 @@ function FileCard({ file }) {
     const mime = file.mimeType || ""
     const isImage = mime.startsWith("image/") && mime !== "image/svg+xml"
     const [imgSrc, setImgSrc] = React.useState(null)
+    // null | "saved" | "opened" | { error: string }
+    const [dlStatus, setDlStatus] = React.useState(null)
 
     React.useEffect(() => {
         if (!isImage) return
@@ -98,15 +100,56 @@ function FileCard({ file }) {
     }, [file.data, file.compressed])
 
     async function handleDownload() {
-        const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
-        const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
-        const blob = new Blob([buf], { type: file.mimeType || "application/octet-stream" })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = file.name
-        a.click()
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        setDlStatus(null)
+        try {
+            const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
+            const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
+            const blob = new Blob([buf], { type: file.mimeType || "application/octet-stream" })
+            const url = URL.createObjectURL(blob)
+            // Some mobile WebViews (especially iOS Telegram) won't honor the
+            // `download` attribute on a detached <a>. Putting the anchor into
+            // the DOM and removing it after the click gives the WebView a
+            // proper user-initiated navigation to handle.
+            const a = document.createElement("a")
+            a.href = url
+            a.download = file.name
+            a.rel = "noopener"
+            // Hidden but in DOM.
+            a.style.position = "absolute"
+            a.style.left = "-9999px"
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            // Haptic confirmation so the user has tactile feedback even when
+            // the OS gives no visual cue.
+            try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.("success") } catch {}
+            setDlStatus("saved")
+            setTimeout(() => URL.revokeObjectURL(url), 5000)
+            setTimeout(() => setDlStatus(s => (s === "saved" ? null : s)), 3500)
+        } catch (e) {
+            setDlStatus({ error: e?.message ?? "Download failed" })
+        }
+    }
+
+    async function handleOpen() {
+        // Fallback for when the platform refuses to save: open the blob in a
+        // new tab so the user can long-press → "save" via the OS UI.
+        try {
+            const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
+            const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
+            const blob = new Blob([buf], { type: file.mimeType || "application/octet-stream" })
+            const url = URL.createObjectURL(blob)
+            const opened = window.open(url, "_blank", "noopener,noreferrer")
+            if (!opened) {
+                setDlStatus({ error: "Pop-up blocked — long-press the file name to save manually." })
+            } else {
+                setDlStatus("opened")
+                setTimeout(() => setDlStatus(s => (s === "opened" ? null : s)), 3500)
+            }
+            setTimeout(() => URL.revokeObjectURL(url), 30000)
+        } catch (e) {
+            setDlStatus({ error: e?.message ?? "Open failed" })
+        }
     }
 
     return (
@@ -129,7 +172,7 @@ function FileCard({ file }) {
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
                     <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>{formatFileSize(file.size)}</div>
                 </div>
-                <button onClick={handleDownload} title="Download" style={{
+                <button onClick={handleDownload} title="Save to device" style={{
                     background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8,
                     padding: "6px 8px", cursor: "pointer", color: "inherit", flexShrink: 0,
                     display: "flex", alignItems: "center", transition: "background 0.12s",
@@ -140,7 +183,28 @@ function FileCard({ file }) {
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
                 </button>
+                <button onClick={handleOpen} title="Open in browser (long-press to save)" style={{
+                    background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8,
+                    padding: "6px 8px", cursor: "pointer", color: "inherit", flexShrink: 0,
+                    display: "flex", alignItems: "center", transition: "background 0.12s", marginLeft: 4,
+                }}>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                        <polyline points="15 3 21 3 21 9"/>
+                        <line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                </button>
             </div>
+            {dlStatus && (
+                <div style={{
+                    marginTop: 6, fontSize: 11, lineHeight: 1.35,
+                    color: typeof dlStatus === "object" ? "#ff8a8a" : "#6ab3f3",
+                }}>
+                    {dlStatus === "saved" && `Saved as ${file.name}. Check your Downloads.`}
+                    {dlStatus === "opened" && "Opened in browser — long-press to save."}
+                    {typeof dlStatus === "object" && dlStatus.error}
+                </div>
+            )}
         </div>
     )
 }
