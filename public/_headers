@@ -1,0 +1,11 @@
+# Cloudflare Pages security headers.
+# Headers here are merged onto every response. Files in /public/ are copied
+# verbatim into dist/ during build, so this lands at the deployed root.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  # frame-ancestors must be a real HTTP header — browsers ignore it in a <meta> CSP.
+  # Only Telegram's WebApp host iframes us. Anyone else gets X-Frame-Options'd.
+  Content-Security-Policy: frame-ancestors 'self' https://web.telegram.org https://*.web.telegram.org

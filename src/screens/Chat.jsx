@@ -57,6 +57,27 @@ async function streamTransform(buffer, Stream) {
 const compressData   = buf => streamTransform(buf, CompressionStream)
 const decompressData = buf => streamTransform(buf, DecompressionStream)
 
+// Compress text bodies above this size before encrypting.
+// Below ~200 bytes deflate overhead (window/header) eats any savings.
+// (Compression happens on the *plaintext* — server only sees ciphertext, so
+// the compress-vs-encrypt-order CRIME concern doesn't apply: attacker has no
+// way to inject chosen plaintext alongside the user's message.)
+const TEXT_COMPRESS_THRESHOLD = 200
+
+async function maybeCompressText(text) {
+    const utf8 = new TextEncoder().encode(text)
+    if (utf8.byteLength < TEXT_COMPRESS_THRESHOLD) return { plaintext: text, type: "message" }
+    const compressed = await compressData(utf8.buffer)
+    if (compressed.byteLength >= utf8.byteLength) return { plaintext: text, type: "message" }
+    return { plaintext: bufToBase64(compressed), type: "message_zip" }
+}
+
+async function decompressText(b64) {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const buf = await decompressData(bytes.buffer)
+    return new TextDecoder().decode(buf)
+}
+
 function FileCard({ file }) {
     // Treat SVG as a generic file (never preview): <img src> won't execute its
     // scripts, but no need to make a Blob URL we could leak by mistake.
@@ -276,7 +297,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
 
-                if (payload.type && payload.type !== "message" && payload.type !== "file") {
+                if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
                     await deleteMessage(msg.id, initData).catch(() => {})
                     continue
                 }
@@ -291,6 +312,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 if (payload.type === "file") {
                     const file = JSON.parse(plaintext)
                     decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                } else if (payload.type === "message_zip") {
+                    const text = await decompressText(plaintext)
+                    decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
                 } else {
                     decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                 }
@@ -369,9 +393,10 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 signedPreKeySignature: bundle.signature,
                 oneTimePreKey: otkPub ?? null,
             })
-            const { message } = await encryptMessage(sessionState, text)
-            await sendMessage(contactId, JSON.stringify({ type: "message", senderInfo, message }), initData)
-            pushDebug(`→ send ok`)
+            const { plaintext: bodyText, type } = await maybeCompressText(text)
+            const { message } = await encryptMessage(sessionState, bodyText)
+            await sendMessage(contactId, JSON.stringify({ type, senderInfo, message }), initData)
+            pushDebug(`→ send ok${type === "message_zip" ? " (zip)" : ""}`)
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)

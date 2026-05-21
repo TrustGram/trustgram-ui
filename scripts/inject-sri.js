@@ -32,13 +32,26 @@ html = html.replace(/<link\b([^>]*)\bhref="(\/assets\/[^"]+)"([^>]*)\/?>/g, (m, 
 const api = process.env.VITE_API_URL ?? "https://trustgram-bot.onrender.com"
 const csp = [
     "default-src 'self'",
+    // telegram-web-app.js is loaded from telegram.org by the host iframe.
     "script-src 'self' https://telegram.org",
+    // React inline styles + Telegram UI bundle styles — kept inline.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src https://fonts.gstatic.com",
     `connect-src 'self' ${api}`,
+    // data: for inline icons, blob: for file-preview URLs created by FileCard.
     "img-src 'self' data: blob:",
+    // Hard no on <object>, <embed>, <applet>.
     "object-src 'none'",
+    // Same-origin Web Workers (none right now, but defence in depth).
+    "worker-src 'self' blob:",
+    // No PWA manifests external to the bundle.
+    "manifest-src 'self'",
+    // Cannot inject <base> to redirect relative URLs.
     "base-uri 'self'",
+    // No HTML <form> submissions anywhere — we use fetch() exclusively.
+    "form-action 'none'",
+    // Force https on any accidentally-http URL in the bundle.
+    "upgrade-insecure-requests",
 ].join("; ")
 
 html = html.replace(/(<head[^>]*>)/, `$1\n    <meta http-equiv="Content-Security-Policy" content="${csp}">`)

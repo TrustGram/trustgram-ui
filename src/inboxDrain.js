@@ -3,6 +3,25 @@ import { fetchInbox, deleteMessage } from "./api"
 import { loadMessages, saveMessages } from "./messageStore"
 import { consumeOTK } from "./storage"
 
+async function decompressText(b64) {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const stream = new DecompressionStream("deflate-raw")
+    const w = stream.writable.getWriter()
+    w.write(bytes); w.close()
+    const chunks = []
+    const r = stream.readable.getReader()
+    for (;;) {
+        const { done, value } = await r.read()
+        if (done) break
+        chunks.push(value)
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0)
+    const out = new Uint8Array(total)
+    let off = 0
+    for (const c of chunks) { out.set(c, off); off += c.length }
+    return new TextDecoder().decode(out)
+}
+
 function dedupKey(m) {
     return `${m.id}|${m.timestamp}`
 }
@@ -43,7 +62,7 @@ export async function drainInbox(identity, storageKey, initData) {
         for (const msg of msgs) {
             try {
                 const payload = JSON.parse(msg.encrypted_payload)
-                if (payload.type && payload.type !== "message" && payload.type !== "file") {
+                if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
                     await deleteMessage(msg.id, initData).catch(() => {})
                     continue
                 }
@@ -57,6 +76,9 @@ export async function drainInbox(identity, storageKey, initData) {
                 if (payload.type === "file") {
                     const file = JSON.parse(plaintext)
                     decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
+                } else if (payload.type === "message_zip") {
+                    const text = await decompressText(plaintext)
+                    decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
                 } else {
                     decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
                 }
