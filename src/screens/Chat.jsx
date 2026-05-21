@@ -1,11 +1,25 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import { initiateSession, encryptMessage, decryptMessage, acceptSession, computeFingerprint } from "../crypto"
-import { fetchBundle, fetchInbox, sendMessage, deleteMessage, refillOTKs, fetchOTKCount } from "../api"
+import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
-import { appendOTKsToIdentity, consumeOTK } from "../storage"
+import { consumeOTK, getOtkLastCheck, setOtkLastCheck } from "../storage"
+import { refillIfLow } from "../keyHealth"
 
 const FILE_MAX_BYTES = 512 * 1024 // 512 KB
+
+// SVG can carry inline <script> that fires on direct-open or drag-into-browser.
+// Block at the picker so we never round-trip a malicious payload through E2E.
+// Both the official mime and the "user picked an .svg with no/wrong mime" path.
+function isUnsafeFile(file) {
+    const mime = (file.type || "").toLowerCase()
+    const name = (file.name || "").toLowerCase()
+    if (mime === "image/svg+xml") return "SVG files are not supported (can embed scripts)."
+    if (name.endsWith(".svg") || name.endsWith(".svgz")) return "SVG files are not supported (can embed scripts)."
+    if (mime.startsWith("text/html") || name.endsWith(".html") || name.endsWith(".htm"))
+        return "HTML files are not supported (can embed scripts)."
+    return null
+}
 
 function formatFileSize(bytes) {
     if (bytes < 1024) return `${bytes} B`
@@ -44,7 +58,10 @@ const compressData   = buf => streamTransform(buf, CompressionStream)
 const decompressData = buf => streamTransform(buf, DecompressionStream)
 
 function FileCard({ file }) {
-    const isImage = file.mimeType?.startsWith("image/")
+    // Treat SVG as a generic file (never preview): <img src> won't execute its
+    // scripts, but no need to make a Blob URL we could leak by mistake.
+    const mime = file.mimeType || ""
+    const isImage = mime.startsWith("image/") && mime !== "image/svg+xml"
     const [imgSrc, setImgSrc] = React.useState(null)
 
     React.useEffect(() => {
@@ -143,10 +160,21 @@ function dedupKey(m) {
     return `${m.id}|${m.timestamp}`
 }
 
+// Stable tie-breaker: when two messages share the same ms timestamp, fall back
+// to comparing IDs. Server IDs are positive integers; optimistic local IDs are
+// strings like "me_1715...". Numeric-aware localeCompare orders both correctly
+// (numbers as numbers, "me_*" lexicographically after) and keeps successive
+// merges deterministic.
+function compareMessages(x, y) {
+    const dt = parseTs(x.timestamp) - parseTs(y.timestamp)
+    if (dt !== 0) return dt
+    return String(x.id).localeCompare(String(y.id), undefined, { numeric: true })
+}
+
 function mergeDedupe(a, b) {
     const seen = new Set(a.map(dedupKey))
     const novel = b.filter(m => !seen.has(dedupKey(m)))
-    return [...a, ...novel].sort((x, y) => parseTs(x.timestamp) - parseTs(y.timestamp))
+    return [...a, ...novel].sort(compareMessages)
 }
 
 export default function Chat({ identity, storageKey, contactId, contactName, onBack, onIdentityRefresh }) {
@@ -165,10 +193,31 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const messagesRef = useRef([])
     const identityRef = useRef(identity)
     const refillInProgress = useRef(false)
+    // Tracks whether the component is still alive. In-flight polling/loading
+    // that resolves after unmount must NOT call setState (React warns + leaks).
+    const mountedRef = useRef(true)
     const initData = getInitData()
 
+    useEffect(() => () => { mountedRef.current = false }, [])
+
     function pushDebug(line) {
+        if (!mountedRef.current) return
         setDebugLog(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()} ${line}`])
+    }
+
+    // Guard setState behind mountedRef so async tasks completing after unmount
+    // are no-ops instead of stale updates.
+    function safeSetMessages(value) {
+        if (!mountedRef.current) return
+        setMessages(value)
+    }
+    function safeSetLoading(value) {
+        if (!mountedRef.current) return
+        setLoading(value)
+    }
+    function safeSetError(value) {
+        if (!mountedRef.current) return
+        setError(value)
     }
 
     useEffect(() => { identityRef.current = identity }, [identity])
@@ -177,46 +226,37 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         if (refillInProgress.current) return
         // throttle: check server at most once per 10 minutes per session
         const OTK_COOLDOWN_MS = 10 * 60 * 1000
-        const lastCheck = parseInt(localStorage.getItem("tg_otk_last_check") ?? "0", 10)
+        const lastCheck = await getOtkLastCheck()
         if (Date.now() - lastCheck < OTK_COOLDOWN_MS) return
 
         refillInProgress.current = true
-        localStorage.setItem("tg_otk_last_check", String(Date.now()))
+        await setOtkLastCheck(Date.now())
         try {
-            const { count } = await fetchOTKCount(initData)
-            if (count < 5) {
-                const OTK_BATCH = 20
-                const pairs = await Promise.all(
-                    Array.from({ length: OTK_BATCH }, () =>
-                        crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"])
-                    )
-                )
-                const oneTimeKeys = await Promise.all(
-                    pairs.map(async (kp, i) => {
-                        const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
-                        const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
-                        return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
-                    })
-                )
-                // Store private keys BEFORE uploading to server — if app closes between the two,
-                // we'd rather have orphaned server keys than unrecoverable server-side OTKs.
-                await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
-                await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
-                if (onIdentityRefresh) await onIdentityRefresh()
-            }
-        } catch {}
+            // refillIfLow holds a navigator.locks lease so a concurrently-open
+            // tab can't race us into uploading a duplicate batch.
+            const did = await refillIfLow({ threshold: 5, batchSize: 20, initData })
+            if (did && onIdentityRefresh) await onIdentityRefresh()
+        } catch (e) {
+            console.warn("[TrustGram] OTK refill failed:", e?.message ?? e)
+            pushDebug(`✗ otk refill: ${e?.message?.slice(0, 50) ?? "?"}`)
+        }
         refillInProgress.current = false
     }
 
     function updateMessages(msgs) {
         messagesRef.current = msgs
-        setMessages(msgs)
+        safeSetMessages(msgs)
+        // saveMessages always persists (decrypted history is valuable even if the
+        // component just unmounted — losing the latest poll's messages from disk
+        // is worse than a brief no-op setState).
         if (storageKey) saveMessages(contactId, msgs, storageKey).catch(() => {})
     }
 
     useEffect(() => {
         let interval
         loadHistory().then(() => {
+            // Don't start polling if we already unmounted during the initial load.
+            if (!mountedRef.current) return
             interval = setInterval(pollMessages, 4000)
         })
         return () => clearInterval(interval)
@@ -271,7 +311,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     }
 
     async function loadHistory() {
-        setLoading(true)
+        safeSetLoading(true)
         try {
             const [history, inbox] = await Promise.all([
                 storageKey ? loadMessages(contactId, storageKey) : Promise.resolve([]),
@@ -282,9 +322,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             const merged = mergeDedupe(mergeDedupe(history, messagesRef.current), decrypted)
             updateMessages(merged)
         } catch (e) {
-            setError(e.message)
+            safeSetError(e.message)
         } finally {
-            setLoading(false)
+            safeSetLoading(false)
         }
     }
 
@@ -295,13 +335,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             if (decrypted.length > 0) {
                 updateMessages(mergeDedupe(messagesRef.current, decrypted))
             }
-        } catch {}
+        } catch (e) {
+            // Don't surface a banner: poll runs every 4s and a single failure
+            // is fine. But never swallow silently — leave a trail for debugging.
+            console.warn("[TrustGram] poll failed:", e?.message ?? e)
+            pushDebug(`✗ poll: ${e?.message?.slice(0, 50) ?? "?"}`)
+        }
     }
 
     async function handleSend() {
         if (!input.trim()) return
         setSending(true)
-        setError(null)
+        safeSetError(null)
         const text = input.trim()
         setInput("")
         inputRef.current?.focus()
@@ -330,9 +375,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
-            setError(e.message)
+            safeSetError(e.message)
         } finally {
-            setSending(false)
+            if (mountedRef.current) setSending(false)
         }
     }
 
@@ -346,12 +391,18 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         e.target.value = ""
 
         if (file.size > FILE_MAX_BYTES) {
-            setError(`File too large: ${formatFileSize(file.size)}. Max is 512 KB.`)
+            safeSetError(`File too large: ${formatFileSize(file.size)}. Max is 512 KB.`)
+            return
+        }
+
+        const unsafe = isUnsafeFile(file)
+        if (unsafe) {
+            safeSetError(unsafe)
             return
         }
 
         setSendingFile(true)
-        setError(null)
+        safeSetError(null)
         try {
             const arrayBuffer = await file.arrayBuffer()
             const compressedBuffer = await compressData(arrayBuffer)
@@ -388,9 +439,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             await sendMessage(contactId, JSON.stringify({ type: "file", senderInfo, message }), initData)
             pushDebug(`→ file ok`)
         } catch (e) {
-            setError(e.message)
+            safeSetError(e.message)
         } finally {
-            setSendingFile(false)
+            if (mountedRef.current) setSendingFile(false)
         }
     }
 

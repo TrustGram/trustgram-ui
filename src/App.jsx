@@ -6,67 +6,105 @@ import Chat from "./screens/Chat"
 import PinLock from "./screens/PinLock"
 import PinSetup from "./screens/PinSetup"
 import ExportImport from "./screens/ExportImport"
-import { loadIdentity, saveIdentity, clearIdentity, getOrCreateStorageKey, appendOTKsToIdentity, updateSPKInIdentity } from "./storage"
+import {
+    loadIdentity, saveIdentity, clearIdentity,
+    getStorageKeyMode, getUnencryptedStorageKey,
+    updateSPKInIdentity,
+    savePendingSPK, loadPendingSPK, clearPendingSPK,
+    getSpkRotatedAt, setSpkRotatedAt,
+} from "./storage"
 import { signSPK } from "./crypto"
 import { clearAllMessages } from "./messageStore"
 import { clearContacts } from "./contacts"
-import { hasPin, clearPin, shouldLockOnOpen, updateLastActivity, getLockInterval } from "./pin"
-import { fetchOTKCount, refillOTKs, updateSPK } from "./api"
+import { hasPin, shouldLockOnOpen, updateLastActivity, getLockInterval, clearLockState } from "./pin"
+import { updateSPK } from "./api"
 import { drainInbox } from "./inboxDrain"
+import { refillIfLow } from "./keyHealth"
 
-const OTK_LOW_WATERMARK = 5
-const OTK_BATCH_SIZE = 20
 const SPK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
+async function finalizePendingSPK(initData, refreshIdentity) {
+    const pending = await loadPendingSPK()
+    if (!pending) return
+    // Retry the parts that may not have completed last time. Server PUT is
+    // idempotent — re-uploading the same SPK is harmless.
+    await updateSPK(pending.publicKey, pending.signature, initData)
+    await updateSPKInIdentity(pending.keyPair)
+    await clearPendingSPK()
+    await setSpkRotatedAt(pending.timestamp ?? Date.now())
+    await refreshIdentity()
+}
+
+async function rotateSPK(identity, storageKey, initData, refreshIdentity) {
+    // 1. Drain inbox so no messages are pending under the old SPK.
+    await drainInbox(identity, storageKey, initData)
+
+    // 2. Generate + sign the new key.
+    const newSpkKeyPair = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"]
+    )
+    const raw = await crypto.subtle.exportKey("raw", newSpkKeyPair.publicKey)
+    const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+    const signature = await signSPK(identity, newSpkKeyPair)
+
+    // 3. Persist the new private half BEFORE telling the server about the public
+    //    half. If we crash now, the next boot recovers by retrying step 4.
+    const timestamp = Date.now()
+    await savePendingSPK({ keyPair: newSpkKeyPair, publicKey: pub, signature, timestamp })
+
+    // 4. Upload to server. On failure, leave pending in place — boot will retry.
+    await updateSPK(pub, signature, initData)
+
+    // 5. Promote pending → current identity.
+    await updateSPKInIdentity(newSpkKeyPair)
+    await clearPendingSPK()
+    await setSpkRotatedAt(timestamp)
+    await refreshIdentity()
+}
+
 async function checkKeyHealth(identity, storageKey, initData, refreshIdentity) {
-    // OTK replenishment
+    // First, finish any rotation that was interrupted last session.
     try {
-        const { count } = await fetchOTKCount(initData)
-        if (count < OTK_LOW_WATERMARK) {
-            const pairs = await Promise.all(
-                Array.from({ length: OTK_BATCH_SIZE }, () =>
-                    crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"])
-                )
-            )
-            const oneTimeKeys = await Promise.all(
-                pairs.map(async (kp, i) => {
-                    const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
-                    const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
-                    return { key_id: `${Date.now()}_${i}`, public_key: pub, keyPair: kp }
-                })
-            )
-            await appendOTKsToIdentity(oneTimeKeys.map(({ keyPair }) => keyPair))
-            await refillOTKs(oneTimeKeys.map(({ key_id, public_key }) => ({ key_id, public_key })), initData)
-            await refreshIdentity()
-        }
-    } catch {}
+        await finalizePendingSPK(initData, refreshIdentity)
+    } catch (e) {
+        console.warn("[TrustGram] pending SPK recovery failed:", e?.message ?? e)
+    }
 
-    // SPK rotation
+    // OTK replenishment (cross-tab safe via navigator.locks).
     try {
-        const lastRotated = parseInt(localStorage.getItem("tg_spk_rotated_at") || "0", 10)
+        const did = await refillIfLow({ threshold: 5, batchSize: 20, initData })
+        if (did) await refreshIdentity()
+    } catch (e) {
+        console.warn("[TrustGram] OTK refill failed:", e?.message ?? e)
+    }
+
+    // SPK rotation (only if no pending — we just recovered one if there was).
+    // Wrap in navigator.locks so two open tabs don't both rotate; the loser
+    // just skips this cycle and tries again on the next boot.
+    try {
+        const lastRotated = await getSpkRotatedAt()
         if (Date.now() - lastRotated > SPK_MAX_AGE_MS) {
-            // drain inbox first so no in-flight messages are lost
-            await drainInbox(identity, storageKey, initData)
-
-            const newSpkKeyPair = await crypto.subtle.generateKey(
-                { name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"]
-            )
-            const raw = await crypto.subtle.exportKey("raw", newSpkKeyPair.publicKey)
-            const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
-            const signature = await signSPK(identity, newSpkKeyPair)
-
-            // upload to server first; only persist locally on success
-            await updateSPK(pub, signature, initData)
-            await updateSPKInIdentity(newSpkKeyPair)
-            localStorage.setItem("tg_spk_rotated_at", String(Date.now()))
-            await refreshIdentity()
+            const run = () => rotateSPK(identity, storageKey, initData, refreshIdentity)
+            if (navigator.locks) {
+                await navigator.locks.request("trustgram:spk-rotate", { ifAvailable: true }, async lock => {
+                    if (!lock) return
+                    await run()
+                })
+            } else {
+                await run()
+            }
         }
-    } catch {}
+    } catch (e) {
+        console.warn("[TrustGram] SPK rotation failed:", e?.message ?? e)
+    }
 }
 
 export default function App() {
     const [identity, setIdentity] = useState(null)
     const [storageKey, setStorageKey] = useState(null)
+    // Raw 32-byte storage key, kept in RAM while unlocked. Needed to re-bind on
+    // PIN change/disable. Null when storage is legacy (non-extractable) or locked.
+    const [storageKeyBytes, setStorageKeyBytes] = useState(null)
     const [loading, setLoading] = useState(true)
     const [activeChat, setActiveChat] = useState(null)
     const [locked, setLocked] = useState(false)
@@ -77,21 +115,33 @@ export default function App() {
 
     useEffect(() => {
         const initData = window.Telegram?.WebApp?.initData || null
-        Promise.all([loadIdentity(), getOrCreateStorageKey()])
-            .then(([saved, key]) => {
-                if (saved) {
-                    setIdentity(saved)
-                    const refresh = async () => {
-                        const refreshed = await loadIdentity()
-                        if (refreshed) setIdentity(refreshed)
+
+        async function bootstrap() {
+            const saved = await loadIdentity()
+            if (saved) setIdentity(saved)
+
+            const mode = await getStorageKeyMode()
+            if (mode === "encrypted") {
+                // PIN required — leave storageKey null, show PinLock.
+                setLocked(true)
+            } else {
+                const result = await getUnencryptedStorageKey()
+                if (result) {
+                    setStorageKey(result.storageKey)
+                    setStorageKeyBytes(result.rawBytes)
+                    if (saved) {
+                        const refresh = async () => {
+                            const refreshed = await loadIdentity()
+                            if (refreshed) setIdentity(refreshed)
+                        }
+                        checkKeyHealth(saved, result.storageKey, initData, refresh).catch(() => {})
                     }
-                    checkKeyHealth(saved, key, initData, refresh).catch(() => {})
+                    if (shouldLockOnOpen()) setLocked(true)
                 }
-                setStorageKey(key)
-                if (shouldLockOnOpen()) setLocked(true)
-            })
-            .catch(console.error)
-            .finally(() => setLoading(false))
+            }
+        }
+
+        bootstrap().catch(console.error).finally(() => setLoading(false))
     }, [])
 
     useEffect(() => {
@@ -104,7 +154,12 @@ export default function App() {
             if (!hasPin()) return
             const interval = getLockInterval()
             if (interval === null) return
-            if (interval === 0 || Date.now() - lastActivityRef.current >= interval) setLocked(true)
+            if (interval === 0 || Date.now() - lastActivityRef.current >= interval) {
+                // Drop the in-RAM key so a memory dump after lock can't see it.
+                setStorageKey(null)
+                setStorageKeyBytes(null)
+                setLocked(true)
+            }
         }
 
         document.addEventListener("click", resetActivity)
@@ -123,6 +178,14 @@ export default function App() {
     async function handleSetupDone(newIdentity) {
         await saveIdentity(newIdentity)
         setIdentity(newIdentity)
+        // First-launch storage key was provisioned during bootstrap.
+        if (!storageKey) {
+            const result = await getUnencryptedStorageKey()
+            if (result) {
+                setStorageKey(result.storageKey)
+                setStorageKeyBytes(result.rawBytes)
+            }
+        }
     }
 
     async function handleIdentityRefresh() {
@@ -130,17 +193,28 @@ export default function App() {
         if (refreshed) setIdentity(refreshed)
     }
 
+    async function handleUnlock({ storageKey: sk, rawBytes }) {
+        setStorageKey(sk)
+        setStorageKeyBytes(rawBytes)
+        setLocked(false)
+    }
+
     async function handleResetKeys() {
-        clearAllMessages()
+        await clearAllMessages()
         clearContacts()
-        clearPin()
+        clearLockState()
+        // clearIdentity() handles spk_rotated_at, otk_last_check, and pending_spk
+        // in IDB plus their legacy localStorage mirrors.
         localStorage.removeItem("tg_otk_remaining")
-        localStorage.removeItem("tg_spk_rotated_at")
-        localStorage.removeItem("tg_otk_last_check")
         await clearIdentity()
         setIdentity(null)
-        const newKey = await getOrCreateStorageKey()
-        setStorageKey(newKey)
+        setStorageKey(null)
+        setStorageKeyBytes(null)
+        const result = await getUnencryptedStorageKey()
+        if (result) {
+            setStorageKey(result.storageKey)
+            setStorageKeyBytes(result.rawBytes)
+        }
     }
 
     if (loading) {
@@ -151,14 +225,15 @@ export default function App() {
         )
     }
 
-    if (!identity) return <Setup onDone={handleSetupDone} />
+    if (locked) return <PinLock onUnlock={handleUnlock} />
 
-    if (locked) return <PinLock onUnlock={() => setLocked(false)} />
+    if (!identity) return <Setup onDone={handleSetupDone} />
 
     if (pinScreen) {
         return (
             <PinSetup
                 mode={pinScreen}
+                storageKeyBytes={storageKeyBytes}
                 onDone={() => setPinScreen(null)}
                 onCancel={() => setPinScreen(null)}
             />

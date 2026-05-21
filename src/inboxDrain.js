@@ -7,11 +7,17 @@ function dedupKey(m) {
     return `${m.id}|${m.timestamp}`
 }
 
+// Stable order: ms timestamp first, then id (numeric-aware) as tie-breaker.
+// See compareMessages in screens/Chat.jsx for rationale.
+function compareMessages(x, y) {
+    const dt = new Date(x.timestamp) - new Date(y.timestamp)
+    if (dt !== 0) return dt
+    return String(x.id).localeCompare(String(y.id), undefined, { numeric: true })
+}
+
 function mergeDedupe(a, b) {
     const seen = new Set(a.map(dedupKey))
-    return [...a, ...b.filter(m => !seen.has(dedupKey(m)))].sort(
-        (x, y) => new Date(x.timestamp) - new Date(y.timestamp)
-    )
+    return [...a, ...b.filter(m => !seen.has(dedupKey(m)))].sort(compareMessages)
 }
 
 /**

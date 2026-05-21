@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react"
 import { Button, Placeholder, Spinner } from "@telegram-apps/telegram-ui"
 import { createIdentity, getPublicBundle } from "../crypto"
 import { registerBundle } from "../api"
+import { setSpkRotatedAt } from "../storage"
 
 const STATUS = {
     IDLE: "idle",
@@ -37,7 +38,7 @@ export default function Setup({ onDone }) {
                 })),
             }, initData)
 
-            localStorage.setItem("tg_spk_rotated_at", String(Date.now()))
+            await setSpkRotatedAt(Date.now())
             setStatus(STATUS.DONE)
             setTimeout(() => onDone(identity), 800)
         } catch (e) {

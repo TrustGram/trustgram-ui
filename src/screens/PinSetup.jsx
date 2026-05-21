@@ -1,5 +1,6 @@
 import React, { useState } from "react"
-import { setPin, verifyPin, clearPin, setLockInterval, getLockInterval } from "../pin"
+import { setLockInterval, getLockInterval } from "../pin"
+import { bindStorageKeyToPin, rebindStorageKeyToPin, unbindStorageKeyFromPin, unlockStorageKey } from "../storage"
 
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
 const PIN_LENGTH = 4
@@ -44,7 +45,9 @@ function Numpad({ onDigit }) {
 }
 
 // mode: "setup" | "change" | "disable"
-export default function PinSetup({ mode = "setup", onDone, onCancel }) {
+// storageKeyBytes: raw 32-byte storage key from the unlocked session. Required
+// for setup/change (to encrypt it) and disable (to persist it back as raw).
+export default function PinSetup({ mode = "setup", storageKeyBytes, onDone, onCancel }) {
     const steps = mode === "setup"
         ? ["enter", "confirm", "interval"]
         : mode === "change"
@@ -54,6 +57,8 @@ export default function PinSetup({ mode = "setup", onDone, onCancel }) {
     const [step, setStep] = useState(0)
     const [pin, setPin_] = useState("")
     const [firstPin, setFirstPin] = useState("")
+    // Cached raw bytes after verify_old succeeded — needed to re-bind in change mode.
+    const [unlockedBytes, setUnlockedBytes] = useState(null)
     const [error, setError] = useState("")
     const [interval, setInterval_] = useState(getLockInterval() ?? 0)
     const [shake, setShake] = useState(false)
@@ -72,15 +77,29 @@ export default function PinSetup({ mode = "setup", onDone, onCancel }) {
         if (next.length < PIN_LENGTH) return
 
         if (currentStep === "verify_old") {
-            const ok = await verifyPin(next)
-            if (!ok) { triggerShake("Wrong PIN"); return }
-            if (mode === "disable") { clearPin(); onDone(); return }
+            const result = await unlockStorageKey(next)
+            if (!result) { triggerShake("Wrong PIN"); return }
+            if (mode === "disable") {
+                try { await unbindStorageKeyFromPin(result.rawBytes) } catch (e) { triggerShake(e.message); return }
+                onDone(); return
+            }
+            setUnlockedBytes(result.rawBytes)
             setPin_(""); setError(""); setStep(s => s + 1)
         } else if (currentStep === "enter") {
             setFirstPin(next); setPin_(""); setError(""); setStep(s => s + 1)
         } else if (currentStep === "confirm") {
             if (next !== firstPin) { triggerShake("PINs don't match"); return }
-            await setPin(next)
+            try {
+                if (mode === "change") {
+                    await rebindStorageKeyToPin(next, unlockedBytes)
+                } else {
+                    // setup: use the bytes the app passed in
+                    await bindStorageKeyToPin(next, storageKeyBytes)
+                }
+            } catch (e) {
+                triggerShake(e.message)
+                return
+            }
             if (steps.includes("interval")) { setPin_(""); setError(""); setStep(s => s + 1) }
             else { setLockInterval(interval); onDone() }
         }

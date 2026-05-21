@@ -1,5 +1,5 @@
 import React, { useState } from "react"
-import { verifyPin } from "../pin"
+import { unlockStorageKey } from "../storage"
 
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
 const PIN_LENGTH = 4
@@ -88,11 +88,11 @@ export default function PinLock({ onUnlock }) {
         if (next.length < PIN_LENGTH) return
 
         setChecking(true)
-        const ok = await verifyPin(next)
+        const result = await unlockStorageKey(next)
         setChecking(false)
 
-        if (ok) {
-            onUnlock()
+        if (result) {
+            onUnlock(result)
         } else {
             const newAttempts = attempts + 1
             setAttempts(newAttempts)
