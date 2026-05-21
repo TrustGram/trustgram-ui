@@ -1,7 +1,15 @@
 import { getContacts, saveContact } from "./contacts"
 import { loadMessages, saveMessages } from "./messageStore"
 
-const to64 = b => btoa(String.fromCharCode(...b))
+// Chunked to avoid RangeError on mobile for large backups (file-bearing chats).
+function to64(b) {
+    let binary = ""
+    const CHUNK = 8192
+    for (let i = 0; i < b.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, b.subarray(i, i + CHUNK))
+    }
+    return btoa(binary)
+}
 const from64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0))
 
 function generateBackupCode() {

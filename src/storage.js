@@ -20,6 +20,16 @@ const IDENTITY = STORES.IDENTITY
 
 const PBKDF2_ITERATIONS = 600000
 
+// Chunked base64 — see messageStore.js for rationale.
+function bytesToBase64(bytes) {
+    let binary = ""
+    const CHUNK = 8192
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+    }
+    return btoa(binary)
+}
+
 // ── Identity ──────────────────────────────────────────────────
 
 export async function saveIdentity(identity) {
@@ -142,7 +152,7 @@ export async function consumeOTK(usedPublicKeyB64) {
     const filtered = []
     for (const kp of identity.oneTimePreKeys) {
         const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
-        const pub = btoa(String.fromCharCode(...new Uint8Array(raw)))
+        const pub = bytesToBase64(new Uint8Array(raw))
         if (pub !== usedPublicKeyB64) filtered.push(kp)
     }
     identity.oneTimePreKeys = filtered

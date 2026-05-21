@@ -306,7 +306,17 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         // saveMessages always persists (decrypted history is valuable even if the
         // component just unmounted — losing the latest poll's messages from disk
         // is worse than a brief no-op setState).
-        if (storageKey) saveMessages(contactId, msgs, storageKey).catch(() => {})
+        //
+        // Never swallow silently — quota/encoding failures here cause the saved
+        // envelope to fall behind in-memory state, so on next load the user sees
+        // an OLDER history (the bug that made picture-bearing chats look like
+        // they "lost history" on reload).
+        if (storageKey) {
+            saveMessages(contactId, msgs, storageKey).catch(e => {
+                console.error("[TrustGram] saveMessages failed:", e)
+                pushDebug(`✗ save: ${e?.message?.slice(0, 50) ?? "?"}`)
+            })
+        }
     }
 
     useEffect(() => {
@@ -410,9 +420,10 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         const text = input.trim()
         setInput("")
         inputRef.current?.focus()
+        const optimisticId = `me_${Date.now()}`
         try {
             const optimistic = mergeDedupe(messagesRef.current, [{
-                id: `me_${Date.now()}`,
+                id: optimisticId,
                 from: "me",
                 text,
                 timestamp: new Date().toISOString(),
@@ -437,6 +448,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
             safeSetError(e.message)
+            // Roll back the optimistic message so the UI doesn't show a "sent"
+            // bubble for something that never reached the server.
+            updateMessages(messagesRef.current.filter(m => m.id !== optimisticId))
+            // Restore the input so the user can retry without retyping.
+            setInput(text)
         } finally {
             if (mountedRef.current) setSending(false)
         }
@@ -464,6 +480,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
         setSendingFile(true)
         safeSetError(null)
+        let optimisticId = null
         try {
             const arrayBuffer = await file.arrayBuffer()
             const compressedBuffer = await compressData(arrayBuffer)
@@ -481,8 +498,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             })
 
             const optimisticFile = { name: file.name, mimeType: file.type, size: file.size, data: base64data, compressed: useCompressed }
+            optimisticId = `me_${Date.now()}`
             updateMessages(mergeDedupe(messagesRef.current, [{
-                id: `me_${Date.now()}`, from: "me", file: optimisticFile, text: null,
+                id: optimisticId, from: "me", file: optimisticFile, text: null,
                 timestamp: new Date().toISOString(),
             }]))
 
@@ -500,7 +518,14 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
             await sendMessage(contactId, JSON.stringify({ type: "file", senderInfo, message }), initData)
             pushDebug(`→ file ok`)
         } catch (e) {
+            console.error("[TrustGram] file send failed:", e)
+            pushDebug(`✗ file: ${e?.message?.slice(0, 50) ?? "?"}`)
             safeSetError(e.message)
+            // Roll back the optimistic message so the UI doesn't show a "sent"
+            // bubble for a file that never reached the server.
+            if (optimisticId) {
+                updateMessages(messagesRef.current.filter(m => m.id !== optimisticId))
+            }
         } finally {
             if (mountedRef.current) setSendingFile(false)
         }

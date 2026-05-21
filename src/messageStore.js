@@ -14,8 +14,16 @@ import { openDB, idbGet, idbPut, idbDelete, idbClear, STORES } from "./idb"
 
 const LS_PREFIX = "tg_msgs_"
 
+// Chunked to avoid RangeError on mobile when bytes.length is large
+// (e.g. encrypted history that includes file payloads). `String.fromCharCode(...bytes)`
+// spreads each byte into a function argument, blowing the JS engine's arg-count limit.
 function toBase64(bytes) {
-    return btoa(String.fromCharCode(...bytes))
+    let binary = ""
+    const CHUNK = 8192
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+    }
+    return btoa(binary)
 }
 
 function fromBase64(str) {

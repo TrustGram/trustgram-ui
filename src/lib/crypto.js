@@ -1,6 +1,12 @@
 // src/primitives.ts
 function toBase64(buf) {
-  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 function fromBase64(b64) {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
@@ -434,4 +440,3 @@ export {
   initiateSession,
   signSPK
 };
-//# sourceMappingURL=crypto.js.map
