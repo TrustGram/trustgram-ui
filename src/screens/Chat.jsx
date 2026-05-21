@@ -131,27 +131,6 @@ function FileCard({ file }) {
         }
     }
 
-    async function handleOpen() {
-        // Fallback for when the platform refuses to save: open the blob in a
-        // new tab so the user can long-press → "save" via the OS UI.
-        try {
-            const bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0))
-            const buf = file.compressed ? await decompressData(bytes.buffer) : bytes.buffer
-            const blob = new Blob([buf], { type: file.mimeType || "application/octet-stream" })
-            const url = URL.createObjectURL(blob)
-            const opened = window.open(url, "_blank", "noopener,noreferrer")
-            if (!opened) {
-                setDlStatus({ error: "Pop-up blocked — long-press the file name to save manually." })
-            } else {
-                setDlStatus("opened")
-                setTimeout(() => setDlStatus(s => (s === "opened" ? null : s)), 3500)
-            }
-            setTimeout(() => URL.revokeObjectURL(url), 30000)
-        } catch (e) {
-            setDlStatus({ error: e?.message ?? "Open failed" })
-        }
-    }
-
     return (
         <div style={{ minWidth: 180, maxWidth: 240 }}>
             {isImage && imgSrc && (
@@ -183,17 +162,6 @@ function FileCard({ file }) {
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
                 </button>
-                <button onClick={handleOpen} title="Open in browser (long-press to save)" style={{
-                    background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8,
-                    padding: "6px 8px", cursor: "pointer", color: "inherit", flexShrink: 0,
-                    display: "flex", alignItems: "center", transition: "background 0.12s", marginLeft: 4,
-                }}>
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                        <polyline points="15 3 21 3 21 9"/>
-                        <line x1="10" y1="14" x2="21" y2="3"/>
-                    </svg>
-                </button>
             </div>
             {dlStatus && (
                 <div style={{
@@ -201,8 +169,12 @@ function FileCard({ file }) {
                     color: typeof dlStatus === "object" ? "#ff8a8a" : "#6ab3f3",
                 }}>
                     {dlStatus === "saved" && `Saved as ${file.name}. Check your Downloads.`}
-                    {dlStatus === "opened" && "Opened in browser — long-press to save."}
                     {typeof dlStatus === "object" && dlStatus.error}
+                </div>
+            )}
+            {isImage && (
+                <div style={{ marginTop: 4, fontSize: 10, opacity: 0.5, lineHeight: 1.3 }}>
+                    Tip: long-press the image to save it via your OS menu.
                 </div>
             )}
         </div>
