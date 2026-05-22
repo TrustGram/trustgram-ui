@@ -16,6 +16,7 @@ import {
 import { signSPK } from "./crypto"
 import { clearAllMessages } from "./messageStore"
 import { clearAllRatchets } from "./ratchetStore"
+import { clearAllFingerprints } from "./fingerprintStore"
 import { clearContacts } from "./contacts"
 import { hasPin, shouldLockOnOpen, updateLastActivity, getLockInterval, clearLockState } from "./pin"
 import { updateSPK } from "./api"
@@ -246,6 +247,7 @@ export default function App() {
     async function handleResetKeys() {
         await clearAllMessages()
         await clearAllRatchets()
+        await clearAllFingerprints()
         clearContacts()
         clearLockState()
         // clearIdentity() handles spk_rotated_at, otk_last_check, and pending_spk

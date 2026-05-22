@@ -6,6 +6,9 @@ import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { consumeOTK, getOtkLastCheck, setOtkLastCheck } from "../storage"
 import { refillIfLow } from "../keyHealth"
 import { withRatchetLock, clearRatchet } from "../ratchetStore"
+import {
+    loadFingerprint, saveFingerprint, verifyFingerprint, clearFingerprint,
+} from "../fingerprintStore"
 
 const FILE_MAX_BYTES = 512 * 1024 // 512 KB
 
@@ -244,7 +247,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
     const [error, setError] = useState(null)
     const [debugLog, setDebugLog] = useState([])
     const [deleteConfirm, setDeleteConfirm] = useState(false)
-    const [safetyNumbers, setSafetyNumbers] = useState(null) // null | { display, loading }
+    const [safetyNumbers, setSafetyNumbers] = useState(null) // null | { display, loading, pinned, pinnedAt, match }
+    // TOFU key-change blocker. Non-null means: a freshly-fetched bundle's
+    // fingerprint does not match the one we pinned earlier — block sends until
+    // the user explicitly trusts the new key.
+    const [keyChangeAlert, setKeyChangeAlert] = useState(null) // null | { computedHex, computedDisplay, pinned, pinnedAt }
     const bottomRef = useRef(null)
     const inputRef = useRef(null)
     const fileInputRef = useRef(null)
@@ -463,6 +470,46 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         }
     }
 
+    /**
+     * Fetch the contact's bundle and run a TOFU fingerprint check before
+     * returning it. On "new" (no pin yet) we silently pin. On "match" we
+     * return the bundle as-is. On "mismatch" we throw with code FP_MISMATCH
+     * — the caller must surface the alert and abort the send.
+     */
+    async function fetchBundleWithPinning() {
+        const bundle = await fetchBundle(contactId, initData)
+        const { hex, display } = await computeFingerprint(
+            identityRef.current, bundle.identity_key, bundle.signing_key,
+        )
+        const verdict = await verifyFingerprint(contactId, hex)
+        if (verdict === "match") return bundle
+        if (verdict === "new") {
+            await saveFingerprint(contactId, hex)
+            return bundle
+        }
+        // mismatch
+        const err = new Error("This contact's keys have changed. Verify before sending.")
+        err.code = "FP_MISMATCH"
+        err.alert = {
+            computedHex: hex,
+            computedDisplay: display,
+            pinned: verdict.pinned,
+            pinnedAt: verdict.pinnedAt,
+        }
+        throw err
+    }
+
+    async function handleTrustNewKey() {
+        if (!keyChangeAlert) return
+        await saveFingerprint(contactId, keyChangeAlert.computedHex)
+        // Any prior ratchet state is bound to the OLD identity keys — drop it
+        // so the next send re-bootstraps a session under the trusted keys.
+        await clearRatchet(contactId).catch(() => {})
+        setKeyChangeAlert(null)
+        safeSetError(null)
+        pushDebug(`✓ trusted new key for ${displayName}`)
+    }
+
     async function handleSend() {
         if (!input.trim()) return
         setSending(true)
@@ -490,7 +537,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
                 if (!state) {
                     // First message — do X3DH. Subsequent messages skip this.
-                    const bundle = await fetchBundle(contactId, initData)
+                    const bundle = await fetchBundleWithPinning()
                     const otkPub = bundle.one_time_key?.public_key
                     pushDebug(`→ send X3DH otk:${otkPub?.slice(0, 8) ?? "null"}`)
                     const init = await initiateSession(identityRef.current, {
@@ -517,7 +564,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
-            safeSetError(e.message)
+            if (e?.code === "FP_MISMATCH") {
+                setKeyChangeAlert(e.alert)
+            } else {
+                safeSetError(e.message)
+            }
             // Roll back the optimistic message so the UI doesn't show a "sent"
             // bubble for something that never reached the server.
             updateMessages(messagesRef.current.filter(m => m.id !== optimisticId))
@@ -578,7 +629,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 let state = existingState
                 let senderInfo = null
                 if (!state) {
-                    const bundle = await fetchBundle(contactId, initData)
+                    const bundle = await fetchBundleWithPinning()
                     const otkPub = bundle.one_time_key?.public_key
                     pushDebug(`→ file X3DH otk:${otkPub?.slice(0, 8) ?? "null"}`)
                     const init = await initiateSession(identityRef.current, {
@@ -604,7 +655,11 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         } catch (e) {
             console.error("[TrustGram] file send failed:", e)
             pushDebug(`✗ file: ${e?.message?.slice(0, 50) ?? "?"}`)
-            safeSetError(e.message)
+            if (e?.code === "FP_MISMATCH") {
+                setKeyChangeAlert(e.alert)
+            } else {
+                safeSetError(e.message)
+            }
             // Roll back the optimistic message so the UI doesn't show a "sent"
             // bubble for a file that never reached the server.
             if (optimisticId) {
@@ -620,19 +675,36 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         // Drop the ratchet state too — otherwise re-adding the contact would
         // try to decrypt their new initial X3DH against a stale session.
         clearRatchet(contactId).catch(() => {})
+        // Wiping a chat is a "start over" gesture: drop the pinned fingerprint
+        // so re-adding the contact is genuinely first-use and re-pins fresh.
+        clearFingerprint(contactId).catch(() => {})
         onBack()
     }
 
     async function handleShowSafetyNumbers() {
-        setSafetyNumbers({ display: null, hex: null, loading: true, showHex: false })
+        setSafetyNumbers({ display: null, hex: null, loading: true, showHex: false, pinned: null, pinnedAt: null })
         try {
-            const bundle = await fetchBundle(contactId, initData)
+            const [bundle, pinnedRecord] = await Promise.all([
+                fetchBundle(contactId, initData),
+                loadFingerprint(contactId),
+            ])
             const { hex, display } = await computeFingerprint(identityRef.current, bundle.identity_key, bundle.signing_key)
-            setSafetyNumbers({ hex, display, loading: false, showHex: false })
+            setSafetyNumbers({
+                hex, display, loading: false, showHex: false,
+                pinned: pinnedRecord?.fingerprint ?? null,
+                pinnedAt: pinnedRecord?.pinnedAt ?? null,
+            })
         } catch (e) {
             setSafetyNumbers(null)
             setError(e.message)
         }
+    }
+
+    async function handleVerifyAndPin() {
+        if (!safetyNumbers?.hex) return
+        await saveFingerprint(contactId, safetyNumbers.hex)
+        setSafetyNumbers(s => ({ ...s, pinned: s.hex, pinnedAt: Date.now() }))
+        pushDebug(`✓ verified ${displayName}`)
     }
 
     const keysAvailable = !!identity
@@ -709,10 +781,98 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                                 {safetyNumbers.showHex ? "Show as emoji" : "Show as numbers"}
                             </button>
                         )}
+                        {!safetyNumbers.loading && (() => {
+                            const matched = safetyNumbers.pinned === safetyNumbers.hex
+                            if (safetyNumbers.pinned && matched) {
+                                return (
+                                    <div style={{
+                                        marginBottom: 16, padding: "8px 14px", borderRadius: 12,
+                                        background: "rgba(67,160,71,0.12)",
+                                        border: "1px solid rgba(67,160,71,0.35)",
+                                        color: "#a3d9a5", fontSize: 12.5, lineHeight: 1.4,
+                                    }}>
+                                        ✓ Verified — pinned {new Date(safetyNumbers.pinnedAt).toLocaleDateString()}
+                                    </div>
+                                )
+                            }
+                            if (safetyNumbers.pinned && !matched) {
+                                return (
+                                    <div style={{
+                                        marginBottom: 16, padding: "10px 14px", borderRadius: 12,
+                                        background: "rgba(255,80,80,0.10)",
+                                        border: "1px solid rgba(255,80,80,0.35)",
+                                        color: "#ff9090", fontSize: 12.5, lineHeight: 1.45,
+                                    }}>
+                                        ⚠️ Keys changed since you verified.<br />
+                                        Compare in person before trusting.
+                                    </div>
+                                )
+                            }
+                            return (
+                                <button onClick={handleVerifyAndPin} style={{
+                                    marginBottom: 16, padding: "8px 18px", borderRadius: 20,
+                                    border: "1px solid rgba(106,179,243,0.4)", background: "transparent",
+                                    color: "#6ab3f3", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                                }}>
+                                    Mark as verified
+                                </button>
+                            )
+                        })()}
                         <div>
                             <button onClick={() => setSafetyNumbers(null)} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
                                 Close
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {keyChangeAlert && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                    <div style={{
+                        background: "#1f2b38", borderRadius: 16, padding: "26px 22px",
+                        maxWidth: 360, width: "100%",
+                        border: "1px solid rgba(255,80,80,0.45)",
+                        boxShadow: "0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,80,80,0.15)",
+                    }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                            <div style={{
+                                width: 38, height: 38, borderRadius: "50%",
+                                background: "rgba(255,80,80,0.15)",
+                                border: "1px solid rgba(255,80,80,0.4)",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                fontSize: 20,
+                            }}>⚠️</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "#ff9090", lineHeight: 1.2 }}>
+                                {displayName}'s keys have changed
+                            </div>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#a0b8cc", lineHeight: 1.55, marginBottom: 14 }}>
+                            This contact's identity is different from the last time you verified them.
+                            Either they reinstalled the app, or someone is intercepting your messages.
+                            <br /><br />
+                            Verify the new safety numbers with them over another channel before trusting:
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 16 }}>
+                            {keyChangeAlert.computedDisplay.split(" ").map((group, i) => (
+                                <div key={i} style={{
+                                    background: "#17212b", borderRadius: 6, padding: "8px 4px",
+                                    fontSize: 12, fontFamily: "monospace", fontWeight: 600,
+                                    letterSpacing: 0.5, color: "#6ab3f3", textAlign: "center",
+                                }}>{group}</div>
+                            ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 10 }}>
+                            <button onClick={() => setKeyChangeAlert(null)} style={{
+                                flex: 1, padding: "10px 14px", borderRadius: 12,
+                                border: "1px solid rgba(255,255,255,0.12)", background: "transparent",
+                                color: "#a0b8cc", fontSize: 14, fontWeight: 600, cursor: "pointer",
+                            }}>Cancel</button>
+                            <button onClick={handleTrustNewKey} style={{
+                                flex: 1, padding: "10px 14px", borderRadius: 12,
+                                border: "none", background: "#c0392b",
+                                color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+                            }}>Trust new key</button>
                         </div>
                     </div>
                 </div>
