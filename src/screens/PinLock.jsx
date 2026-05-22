@@ -1,9 +1,8 @@
-import React, { useState } from "react"
-import { unlockStorageKey } from "../storage"
+import React, { useState, useEffect } from "react"
+import { unlockStorageKey, getPinAttemptState, recordPinFailure, resetPinAttempts } from "../storage"
 
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
 const PIN_LENGTH = 4
-const MAX_ATTEMPTS = 5
 
 const CSS = `
   .pin-root { scrollbar-width: none; }
@@ -47,6 +46,15 @@ const CSS = `
   }
 `
 
+function formatRemaining(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000))
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = s % 60
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+    return `${m}:${String(sec).padStart(2, "0")}`
+}
+
 function PinDots({ value, shake }) {
     return (
         <div className="pin-dots-wrap" style={{
@@ -74,13 +82,38 @@ function PinDots({ value, shake }) {
 export default function PinLock({ onUnlock }) {
     const [pin, setPin] = useState("")
     const [error, setError] = useState("")
-    const [attempts, setAttempts] = useState(0)
+    // Persisted across reloads — see storage.js cooldownMs ladder.
+    const [attempts, setAttempts] = useState({ count: 0, lockedUntil: 0 })
     const [checking, setChecking] = useState(false)
     const [shake, setShake] = useState(false)
     const [lockAnim, setLockAnim] = useState(false)
+    const [now, setNow] = useState(() => Date.now())
+
+    useEffect(() => {
+        getPinAttemptState().then(setAttempts).catch(() => {})
+    }, [])
+
+    const locked = attempts.lockedUntil > now
+
+    // Tick once a second while a cooldown is in effect so the countdown updates.
+    useEffect(() => {
+        if (!locked) return
+        const id = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(id)
+    }, [locked])
+
+    // Keep the error label in sync with the countdown / unlock transition.
+    useEffect(() => {
+        if (locked) {
+            setError(`Locked — try again in ${formatRemaining(attempts.lockedUntil - now)}`)
+        } else if (attempts.lockedUntil > 0 && attempts.lockedUntil <= now) {
+            // Cooldown just expired — clear stale message, let user try again.
+            setError("")
+        }
+    }, [now, locked, attempts.lockedUntil])
 
     async function handleDigit(d) {
-        if (checking || attempts >= MAX_ATTEMPTS) return
+        if (checking || locked) return
         if (d === "⌫") { setPin(p => p.slice(0, -1)); setError(""); return }
         if (!d) return
         const next = pin + d
@@ -92,18 +125,23 @@ export default function PinLock({ onUnlock }) {
         setChecking(false)
 
         if (result) {
+            await resetPinAttempts()
             onUnlock(result)
+            return
+        }
+
+        const newState = await recordPinFailure()
+        setAttempts(newState)
+        setNow(Date.now())
+        setShake(true)
+        setLockAnim(true)
+        setTimeout(() => { setShake(false); setLockAnim(false) }, 600)
+        setPin("")
+
+        if (newState.lockedUntil > Date.now()) {
+            setError(`Locked — try again in ${formatRemaining(newState.lockedUntil - Date.now())}`)
         } else {
-            const newAttempts = attempts + 1
-            setAttempts(newAttempts)
-            setShake(true)
-            setLockAnim(true)
-            setTimeout(() => { setShake(false); setLockAnim(false) }, 600)
-            setPin("")
-            setError(newAttempts >= MAX_ATTEMPTS
-                ? "Too many attempts. Restart the app."
-                : `Wrong PIN · ${MAX_ATTEMPTS - newAttempts} ${MAX_ATTEMPTS - newAttempts === 1 ? "try" : "tries"} left`
-            )
+            setError("Wrong PIN")
         }
     }
 
@@ -179,7 +217,7 @@ export default function PinLock({ onUnlock }) {
                             key={i}
                             className={`pin-key pin-numpad-btn ${d === "⌫" ? "pin-numpad-del" : d ? "pin-numpad-fs" : ""}`}
                             onClick={() => handleDigit(d)}
-                            disabled={!d || attempts >= MAX_ATTEMPTS}
+                            disabled={!d || locked}
                             style={{
                                 borderRadius: "50%",
                                 fontWeight: d === "⌫" ? 400 : 300,
@@ -189,7 +227,7 @@ export default function PinLock({ onUnlock }) {
                                 color: d ? "#e8f0f7" : "transparent",
                                 boxShadow: d ? "0 3px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
                                 fontFamily: "inherit",
-                                opacity: attempts >= MAX_ATTEMPTS && d ? 0.4 : 1,
+                                opacity: locked && d ? 0.4 : 1,
                             }}
                         >
                             {d}

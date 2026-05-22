@@ -8,6 +8,7 @@ import { openDB, idbGet, idbPut, idbDelete, STORES } from "./idb"
 //   pending_spk           — interrupted-rotation recovery record
 //   spk_rotated_at        — last-successful-SPK-rotation timestamp (number)
 //   otk_last_check        — last OTK-refill-poll timestamp (number)
+//   pin_attempts          — { count, lockedUntil } — survives reload, used for cooldown
 //
 // `tg_has_pin` is mirrored to localStorage purely so hasPin() can be a
 // synchronous boolean — render paths can't await an IDB read. It's just a
@@ -51,6 +52,7 @@ export async function clearIdentity() {
     await idbDelete(db, IDENTITY, "pending_spk")
     await idbDelete(db, IDENTITY, "spk_rotated_at")
     await idbDelete(db, IDENTITY, "otk_last_check")
+    await idbDelete(db, IDENTITY, "pin_attempts")
     localStorage.removeItem(LS_HAS_PIN)
     localStorage.removeItem(LS_SPK_ROTATED_AT)
     localStorage.removeItem(LS_OTK_LAST_CHECK)
@@ -270,7 +272,50 @@ export async function unbindStorageKeyFromPin(rawBytes) {
     const db = await openDB()
     await idbPut(db, IDENTITY, "storage_key_raw", rawBytes)
     await idbDelete(db, IDENTITY, "storage_key_encrypted")
+    await idbDelete(db, IDENTITY, "pin_attempts")
     localStorage.removeItem(LS_HAS_PIN)
+}
+
+// ── PIN brute-force cooldown ──────────────────────────────────
+// React state for the attempts counter was a paper limit — a reload reset it
+// to 0. Persist count + lockedUntil in IDB so an in-app brute-forcer can't
+// just refresh to keep trying.
+//
+// Ladder (count = total failures since last success):
+//   <5        — no cooldown
+//   5         — 1 minute
+//   6..9      — doubles each: 2m, 4m, 8m, 16m
+//   10..19    — (n − 9) hours: 1h, 2h, …, 10h
+//   >=20      — 24h cap
+//
+// Reset to 0 on successful unlock. Cleared on reset-keys / PIN-disable.
+
+function cooldownMs(count) {
+    if (count < 5) return 0
+    if (count < 10) return 60_000 * Math.pow(2, count - 5)
+    if (count < 20) return 3_600_000 * (count - 9)
+    return 24 * 3_600_000
+}
+
+export async function getPinAttemptState() {
+    const db = await openDB()
+    const stored = await idbGet(db, IDENTITY, "pin_attempts")
+    return stored || { count: 0, lockedUntil: 0 }
+}
+
+export async function recordPinFailure() {
+    const db = await openDB()
+    const prev = (await idbGet(db, IDENTITY, "pin_attempts")) || { count: 0, lockedUntil: 0 }
+    const count = prev.count + 1
+    const cd = cooldownMs(count)
+    const state = { count, lockedUntil: cd > 0 ? Date.now() + cd : 0 }
+    await idbPut(db, IDENTITY, "pin_attempts", state)
+    return state
+}
+
+export async function resetPinAttempts() {
+    const db = await openDB()
+    await idbDelete(db, IDENTITY, "pin_attempts")
 }
 
 /**
