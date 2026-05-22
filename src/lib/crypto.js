@@ -287,6 +287,7 @@ async function combineDH3(dh1, dh2, dh3) {
 
 // src/ratchet.ts
 var MAX_SKIP = 100;
+var MAX_TOTAL_SKIPPED = 500;
 async function initSenderRatchet(masterSecret, theirPublicKeyB64) {
   const dhSendKey = await generateKeyPair();
   const theirPub = await importPublicKey(theirPublicKeyB64);
@@ -418,7 +419,8 @@ async function skipMessageKeys(state, until) {
     chainKey = nextChainKey;
     recvCount++;
   }
-  return { ...state, recvChainKey: chainKey, recvCount, skippedKeys };
+  const trimmed = skippedKeys.length > MAX_TOTAL_SKIPPED ? skippedKeys.slice(skippedKeys.length - MAX_TOTAL_SKIPPED) : skippedKeys;
+  return { ...state, recvChainKey: chainKey, recvCount, skippedKeys: trimmed };
 }
 
 // src/index.ts

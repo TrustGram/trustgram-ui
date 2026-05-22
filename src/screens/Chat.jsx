@@ -302,7 +302,7 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         try {
             // refillIfLow holds a navigator.locks lease so a concurrently-open
             // tab can't race us into uploading a duplicate batch.
-            const did = await refillIfLow({ threshold: 5, batchSize: 20, initData })
+            const did = await refillIfLow({ threshold: 10, batchSize: 20, initData })
             if (did && onIdentityRefresh) await onIdentityRefresh()
         } catch (e) {
             console.warn("[TrustGram] OTK refill failed:", e?.message ?? e)

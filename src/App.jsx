@@ -74,7 +74,7 @@ async function checkKeyHealth(identity, storageKey, initData, refreshIdentity) {
 
     // OTK replenishment (cross-tab safe via navigator.locks).
     try {
-        const did = await refillIfLow({ threshold: 5, batchSize: 20, initData })
+        const did = await refillIfLow({ threshold: 10, batchSize: 20, initData })
         if (did) await refreshIdentity()
     } catch (e) {
         console.warn("[TrustGram] OTK refill failed:", e?.message ?? e)

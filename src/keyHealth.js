@@ -54,8 +54,13 @@ async function withOtkLock(task) {
  *     mid-upload yields orphan-server-keys (recoverable) rather than orphan-
  *     local-keys (unrecoverable inbound decryption failures).
  *   - returns true if a refill actually happened, false otherwise.
+ *
+ * Default threshold is 10: fetchBundle pops an OPK eagerly at fetch time
+ * even when the sender ultimately doesn't deliver, so the pool drains faster
+ * than per-message accounting suggests. Keeping more headroom reduces the
+ * chance the pool hits 0 between refill checks.
  */
-export async function refillIfLow({ threshold = 5, batchSize = 20, initData }) {
+export async function refillIfLow({ threshold = 10, batchSize = 20, initData }) {
     return (await withOtkLock(async () => {
         const { count } = await fetchOTKCount(initData)
         if (count >= threshold) return false
