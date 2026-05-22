@@ -87,11 +87,11 @@ async function advanceChainStep(chainKey) {
 }
 async function aesEncrypt(key, plaintext) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(plaintext);
+  const padded = padPlaintext(new TextEncoder().encode(plaintext));
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    encoded
+    padded
   );
   return {
     iv: toBase64(iv.buffer),
@@ -104,7 +104,52 @@ async function aesDecrypt(key, iv, ciphertext) {
     key,
     fromBase64(ciphertext)
   );
-  return new TextDecoder().decode(decrypted);
+  const stripped = unpadPlaintext(new Uint8Array(decrypted));
+  return new TextDecoder().decode(stripped);
+}
+var PAD_MAGIC = new Uint8Array([84, 71, 80, 49]);
+var PAD_HEADER_LEN = PAD_MAGIC.length + 4;
+var BUCKETS = [
+  256,
+  512,
+  1024,
+  2048,
+  4096,
+  8192,
+  16384,
+  32768,
+  65536,
+  131072,
+  262144,
+  524288,
+  1048576
+];
+function bucketSize(byteLen) {
+  for (const b of BUCKETS) if (byteLen <= b) return b;
+  let n = BUCKETS[BUCKETS.length - 1] * 2;
+  while (n < byteLen) n *= 2;
+  return n;
+}
+function padPlaintext(utf8) {
+  const total = bucketSize(PAD_HEADER_LEN + utf8.length);
+  const out = new Uint8Array(total);
+  out.set(PAD_MAGIC, 0);
+  const len = utf8.length;
+  out[4] = len >>> 24 & 255;
+  out[5] = len >>> 16 & 255;
+  out[6] = len >>> 8 & 255;
+  out[7] = len & 255;
+  out.set(utf8, PAD_HEADER_LEN);
+  return out;
+}
+function unpadPlaintext(buf) {
+  if (buf.length < PAD_HEADER_LEN) return buf;
+  for (let i = 0; i < PAD_MAGIC.length; i++) {
+    if (buf[i] !== PAD_MAGIC[i]) return buf;
+  }
+  const len = buf[4] << 24 | buf[5] << 16 | buf[6] << 8 | buf[7];
+  if (len < 0 || len > buf.length - PAD_HEADER_LEN) return buf;
+  return buf.subarray(PAD_HEADER_LEN, PAD_HEADER_LEN + len);
 }
 async function sha256(data) {
   return crypto.subtle.digest("SHA-256", data);
