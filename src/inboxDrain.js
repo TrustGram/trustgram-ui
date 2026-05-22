@@ -1,4 +1,4 @@
-import { acceptSession, decryptMessage } from "./crypto"
+import { acceptSessionAndDecryptFirstMessage, decryptMessage } from "./crypto"
 import { fetchInbox, deleteMessage } from "./api"
 import { loadMessages, saveMessages } from "./messageStore"
 import { consumeOTK } from "./storage"
@@ -72,45 +72,45 @@ export async function drainInbox(identity, storageKey, initData) {
                         continue
                     }
 
-                    if (!state) {
-                        if (!payload.senderInfo) {
-                            await deleteMessage(msg.id, initData).catch(() => {})
-                            continue
-                        }
-                        state = await acceptSession(
-                            identity,
-                            payload.senderInfo.oneTimePreKeyId,
-                            payload.senderInfo.identityKey,
-                            payload.senderInfo.ephemeralKey,
-                        )
-                        if (payload.senderInfo.oneTimePreKeyId) {
-                            consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                        }
+                    // No state and no senderInfo → can't bootstrap. Drop.
+                    if (!state && !payload.senderInfo) {
+                        await deleteMessage(msg.id, initData).catch(() => {})
+                        continue
                     }
 
                     let plaintext
                     let nextState
-                    try {
-                        const res = await decryptMessage(state, payload.message)
+                    if (!state) {
+                        // First message of session — bootstrap, trying current
+                        // SPK then each retired one (covers in-flight sends
+                        // that used our pre-rotation bundle).
+                        const res = await acceptSessionAndDecryptFirstMessage(
+                            identity, payload.senderInfo, payload.message,
+                        )
                         plaintext = res.plaintext
                         nextState = res.state
-                    } catch (e) {
-                        if (payload.senderInfo) {
-                            // Re-bootstrap (sender restarted session)
-                            state = await acceptSession(
-                                identity,
-                                payload.senderInfo.oneTimePreKeyId,
-                                payload.senderInfo.identityKey,
-                                payload.senderInfo.ephemeralKey,
-                            )
-                            if (payload.senderInfo.oneTimePreKeyId) {
-                                consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                            }
+                        if (payload.senderInfo.oneTimePreKeyId) {
+                            consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                        }
+                    } else {
+                        try {
                             const res = await decryptMessage(state, payload.message)
                             plaintext = res.plaintext
                             nextState = res.state
-                        } else {
-                            throw e
+                        } catch (e) {
+                            if (payload.senderInfo) {
+                                // Sender restarted their session — re-bootstrap.
+                                const res = await acceptSessionAndDecryptFirstMessage(
+                                    identity, payload.senderInfo, payload.message,
+                                )
+                                plaintext = res.plaintext
+                                nextState = res.state
+                                if (payload.senderInfo.oneTimePreKeyId) {
+                                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                                }
+                            } else {
+                                throw e
+                            }
                         }
                     }
                     state = nextState

@@ -58,10 +58,35 @@ export async function clearIdentity() {
     localStorage.removeItem(LS_OTK_LAST_CHECK)
 }
 
+// SPK rotation history. We keep a small window of previously-active SPK
+// keypairs so messages encrypted by senders that cached our pre-rotation
+// bundle can still be decrypted. Tuned to the rotation cadence:
+//   SPK rotates every 7 days → 4 entries covers ~4 weeks of in-flight grace.
+//
+// Pruned by both count and age — a sender that cached our bundle a month ago
+// has bigger problems than a missed message.
+const OLD_SPK_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+const OLD_SPK_MAX_ENTRIES = 4
+
+function pruneOldSpks(list) {
+    const now = Date.now()
+    return list
+        .filter(e => e?.keyPair && now - (e.retiredAt ?? 0) < OLD_SPK_MAX_AGE_MS)
+        .slice(0, OLD_SPK_MAX_ENTRIES)
+}
+
 export async function updateSPKInIdentity(newSpkKeyPair) {
     const db = await openDB()
     const identity = await idbGet(db, IDENTITY, "identity")
     if (!identity) return
+    const previousSpk = identity.signedPreKey
+    // Push the outgoing SPK onto the front of the history before replacing it,
+    // so the next acceptSession can still try it.
+    const prev = Array.isArray(identity.oldSignedPreKeys) ? identity.oldSignedPreKeys : []
+    identity.oldSignedPreKeys = pruneOldSpks([
+        { keyPair: previousSpk, retiredAt: Date.now() },
+        ...prev,
+    ])
     identity.signedPreKey = newSpkKeyPair
     await idbPut(db, IDENTITY, "identity", identity)
 }

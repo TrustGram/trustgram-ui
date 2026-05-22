@@ -1,1 +1,5 @@
-export { createIdentity, getPublicBundle, signSPK, initiateSession, acceptSession, encryptMessage, decryptMessage, computeFingerprint } from "trustgram-crypto"
+export {
+    createIdentity, getPublicBundle, signSPK,
+    initiateSession, acceptSession, acceptSessionAndDecryptFirstMessage,
+    encryptMessage, decryptMessage, computeFingerprint,
+} from "trustgram-crypto"

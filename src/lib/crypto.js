@@ -391,7 +391,7 @@ async function initiateSession(myIdentity, theirBundle) {
   const state = await initSenderRatchet(masterSecret, theirBundle.signedPreKey);
   return { state, senderInfo: senderBundle };
 }
-async function acceptSession(myIdentity, usedOneTimePreKey, senderIdentityKey, senderEphemeralKey) {
+async function acceptSession(myIdentity, usedOneTimePreKey, senderIdentityKey, senderEphemeralKey, spkOverride) {
   let usedOPK = null;
   if (usedOneTimePreKey) {
     for (const kp of myIdentity.oneTimePreKeys) {
@@ -403,14 +403,38 @@ async function acceptSession(myIdentity, usedOneTimePreKey, senderIdentityKey, s
     }
     if (!usedOPK) throw new Error("One-time pre-key not found");
   }
+  const spk = spkOverride ?? myIdentity.signedPreKey;
   const masterSecret = await x3dhReceive(
     myIdentity.identityKey,
-    myIdentity.signedPreKey,
+    spk,
     usedOPK,
     senderIdentityKey,
     senderEphemeralKey
   );
-  return initReceiverRatchet(masterSecret, myIdentity.signedPreKey);
+  return initReceiverRatchet(masterSecret, spk);
+}
+async function acceptSessionAndDecryptFirstMessage(myIdentity, senderInfo, encryptedMessage) {
+  const candidates = [myIdentity.signedPreKey];
+  for (const retired of myIdentity.oldSignedPreKeys ?? []) {
+    candidates.push(retired.keyPair);
+  }
+  let lastErr = null;
+  for (const spk of candidates) {
+    try {
+      const state = await acceptSession(
+        myIdentity,
+        senderInfo.oneTimePreKeyId,
+        senderInfo.identityKey,
+        senderInfo.ephemeralKey,
+        spk
+      );
+      const { plaintext, state: nextState } = await ratchetDecrypt(state, encryptedMessage);
+      return { state: nextState, plaintext };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Failed to decrypt initial message with any known SPK");
 }
 async function encryptMessage(state, plaintext) {
   return ratchetEncrypt(state, plaintext);
@@ -443,6 +467,7 @@ async function computeFingerprint(myIdentity, theirIdentityKeyB64, theirSigningK
 }
 export {
   acceptSession,
+  acceptSessionAndDecryptFirstMessage,
   computeFingerprint,
   createIdentity,
   decryptMessage,
@@ -451,3 +476,4 @@ export {
   initiateSession,
   signSPK
 };
+//# sourceMappingURL=crypto.js.map

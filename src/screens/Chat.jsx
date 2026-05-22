@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
-import { initiateSession, encryptMessage, decryptMessage, acceptSession, computeFingerprint } from "../crypto"
+import {
+    initiateSession, encryptMessage, decryptMessage,
+    acceptSessionAndDecryptFirstMessage, computeFingerprint,
+} from "../crypto"
 import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
 import { loadMessages, saveMessages, clearMessages } from "../messageStore"
 import { consumeOTK, getOtkLastCheck, setOtkLastCheck } from "../storage"
@@ -364,51 +367,49 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                     // First message of a session — receiver bootstraps via X3DH.
                     // Subsequent messages reuse the saved state.
                     //
-                    // If senderInfo is present but we already have state, we
-                    // still accept the new X3DH (sender may have lost state
-                    // and is starting fresh) — fall back if normal decrypt
-                    // fails. For now: trust senderInfo only when state is null.
+                    // acceptSessionAndDecryptFirstMessage internally tries the
+                    // current SPK and each retired SPK, so a sender that cached
+                    // our pre-rotation bundle still decrypts cleanly.
+                    let plaintext
+                    let nextState
                     if (!state) {
                         if (!payload.senderInfo) {
                             throw new Error("No session state and no senderInfo")
                         }
-                        state = await acceptSession(
+                        const res = await acceptSessionAndDecryptFirstMessage(
                             identityRef.current,
-                            payload.senderInfo.oneTimePreKeyId,
-                            payload.senderInfo.identityKey,
-                            payload.senderInfo.ephemeralKey,
+                            payload.senderInfo,
+                            payload.message,
                         )
+                        plaintext = res.plaintext
+                        nextState = res.state
                         if (payload.senderInfo.oneTimePreKeyId) {
                             consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
                         }
-                    }
-
-                    let plaintext
-                    let nextState
-                    try {
-                        const res = await decryptMessage(state, payload.message)
-                        plaintext = res.plaintext
-                        nextState = res.state
-                    } catch (decryptErr) {
-                        // If we have state but it doesn't work and the message
-                        // carries a senderInfo (sender restarted session),
-                        // bootstrap from scratch and retry once.
-                        if (payload.senderInfo) {
-                            pushDebug(`↻ resync #${msg.id} (state mismatch)`)
-                            state = await acceptSession(
-                                identityRef.current,
-                                payload.senderInfo.oneTimePreKeyId,
-                                payload.senderInfo.identityKey,
-                                payload.senderInfo.ephemeralKey,
-                            )
-                            if (payload.senderInfo.oneTimePreKeyId) {
-                                consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                            }
+                    } else {
+                        try {
                             const res = await decryptMessage(state, payload.message)
                             plaintext = res.plaintext
                             nextState = res.state
-                        } else {
-                            throw decryptErr
+                        } catch (decryptErr) {
+                            // State exists but doesn't decrypt this message. If the
+                            // sender shipped a senderInfo, they probably restarted
+                            // the session — re-bootstrap (also trying old SPKs).
+                            if (payload.senderInfo) {
+                                pushDebug(`↻ resync #${msg.id} (state mismatch)`)
+                                const res = await acceptSessionAndDecryptFirstMessage(
+                                    identityRef.current,
+                                    payload.senderInfo,
+                                    payload.message,
+                                )
+                                plaintext = res.plaintext
+                                nextState = res.state
+                                if (payload.senderInfo.oneTimePreKeyId) {
+                                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
+                                }
+                            } else {
+                                throw decryptErr
+                            }
                         }
                     }
                     state = nextState
