@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from "react"
-import { unlockStorageKey, getPinAttemptState, recordPinFailure, resetPinAttempts } from "../storage"
+import { unlockStorageKey, getPinAttemptState, recordPinFailure, resetPinAttempts, getPinLength } from "../storage"
 
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
-const PIN_LENGTH = 4
 
 const CSS = `
   .pin-root { scrollbar-width: none; }
@@ -55,13 +54,16 @@ function formatRemaining(ms) {
     return `${m}:${String(sec).padStart(2, "0")}`
 }
 
-function PinDots({ value, shake }) {
+function PinDots({ value, shake, length }) {
+    // 6-digit mode gets slightly tighter spacing so the row doesn't overflow
+    // narrow viewports.
+    const gap = length === 6 ? 14 : 20
     return (
         <div className="pin-dots-wrap" style={{
-            display: "flex", gap: 20, justifyContent: "center",
+            display: "flex", gap, justifyContent: "center",
             animation: shake ? "shake 0.5s" : "none",
         }}>
-            {Array.from({ length: PIN_LENGTH }, (_, i) => {
+            {Array.from({ length }, (_, i) => {
                 const filled = i < value.length
                 return (
                     <div key={i} style={{
@@ -84,6 +86,9 @@ export default function PinLock({ onUnlock }) {
     const [error, setError] = useState("")
     // Persisted across reloads — see storage.js cooldownMs ladder.
     const [attempts, setAttempts] = useState({ count: 0, lockedUntil: 0 })
+    // PIN length is per-install (4 or 6) — read once from the stored blob.
+    // Legacy installs without the field default to 4.
+    const [pinLength, setPinLength] = useState(4)
     const [checking, setChecking] = useState(false)
     const [shake, setShake] = useState(false)
     const [lockAnim, setLockAnim] = useState(false)
@@ -91,6 +96,7 @@ export default function PinLock({ onUnlock }) {
 
     useEffect(() => {
         getPinAttemptState().then(setAttempts).catch(() => {})
+        getPinLength().then(setPinLength).catch(() => {})
     }, [])
 
     const locked = attempts.lockedUntil > now
@@ -118,7 +124,7 @@ export default function PinLock({ onUnlock }) {
         if (!d) return
         const next = pin + d
         setPin(next)
-        if (next.length < PIN_LENGTH) return
+        if (next.length < pinLength) return
 
         setChecking(true)
         const result = await unlockStorageKey(next)
@@ -191,7 +197,7 @@ export default function PinLock({ onUnlock }) {
                     Enter your PIN to continue
                 </div>
 
-                <PinDots value={pin} shake={shake} />
+                <PinDots value={pin} shake={shake} length={pinLength} />
 
                 <div className="pin-err-wrap" style={{ display: "flex", alignItems: "center" }}>
                     {error && (

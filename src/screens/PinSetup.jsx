@@ -1,9 +1,11 @@
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { setLockInterval, getLockInterval } from "../pin"
-import { bindStorageKeyToPin, rebindStorageKeyToPin, unbindStorageKeyFromPin, unlockStorageKey } from "../storage"
+import {
+    bindStorageKeyToPin, rebindStorageKeyToPin, unbindStorageKeyFromPin,
+    unlockStorageKey, getPinLength,
+} from "../storage"
 
 const NUMPAD = ["1","2","3","4","5","6","7","8","9","","0","⌫"]
-const PIN_LENGTH = 4
 
 // Note: the "Immediately" option still has a small grace window (~5s) so the
 // system file picker / share sheet / OS permission prompts don't trigger a
@@ -16,10 +18,11 @@ const INTERVALS = [
     { label: "Never", value: null },
 ]
 
-function PinDots({ value, error }) {
+function PinDots({ value, error, length }) {
+    const gap = length === 6 ? 12 : 18
     return (
-        <div style={{ display: "flex", gap: 18, justifyContent: "center", margin: "24px 0 8px" }}>
-            {Array.from({ length: PIN_LENGTH }, (_, i) => (
+        <div style={{ display: "flex", gap, justifyContent: "center", margin: "24px 0 8px" }}>
+            {Array.from({ length }, (_, i) => (
                 <div key={i} style={{
                     width: 14, height: 14, borderRadius: "50%",
                     background: i < value.length ? (error ? "#ff6b6b" : "#6ab3f3") : "transparent",
@@ -47,6 +50,39 @@ function Numpad({ onDigit }) {
     )
 }
 
+function LengthToggle({ value, onChange }) {
+    // Lets the user choose between a 4- or 6-digit PIN. 6 is 100× the
+    // search space, which matters for offline brute against an exfiltrated
+    // IDB copy (the in-app brute is already throttled by the cooldown ladder).
+    return (
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 16 }}>
+            {[4, 6].map(opt => {
+                const active = value === opt
+                return (
+                    <button
+                        key={opt}
+                        onClick={() => onChange(opt)}
+                        style={{
+                            padding: "6px 16px",
+                            borderRadius: 999,
+                            border: `1px solid ${active ? "#6ab3f3" : "rgba(106,179,243,0.25)"}`,
+                            background: active ? "rgba(106,179,243,0.15)" : "transparent",
+                            color: active ? "#e8f0f7" : "#708499",
+                            fontSize: 12.5,
+                            fontWeight: active ? 600 : 500,
+                            cursor: "pointer",
+                            letterSpacing: "0.2px",
+                            transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                        }}
+                    >
+                        {opt} digits
+                    </button>
+                )
+            })}
+        </div>
+    )
+}
+
 // mode: "setup" | "change" | "disable"
 // storageKeyBytes: raw 32-byte storage key from the unlocked session. Required
 // for setup/change (to encrypt it) and disable (to persist it back as raw).
@@ -65,19 +101,37 @@ export default function PinSetup({ mode = "setup", storageKeyBytes, onDone, onCa
     const [error, setError] = useState("")
     const [interval, setInterval_] = useState(getLockInterval() ?? 0)
     const [shake, setShake] = useState(false)
+    // Default to 6 for fresh setup; for change mode load the current length so
+    // the toggle pre-selects what the user already has.
+    const [pinLength, setPinLength] = useState(mode === "setup" ? 6 : 4)
+
+    useEffect(() => {
+        if (mode !== "setup") getPinLength().then(setPinLength).catch(() => {})
+    }, [mode])
 
     const currentStep = steps[step]
+    // Old-PIN verification always uses the stored length, even if the user is
+    // about to change it. Showing the toggle is only for the new PIN.
+    const expectedLen = currentStep === "verify_old" ? pinLength : pinLength
+    const showLengthToggle = currentStep === "enter"
 
     function triggerShake(msg) {
         setShake(true); setTimeout(() => setShake(false), 400)
         setError(msg); setPin_("")
     }
 
+    function handleLengthChange(newLength) {
+        if (newLength === pinLength) return
+        setPinLength(newLength)
+        setPin_("")
+        setError("")
+    }
+
     async function handleDigit(d) {
         if (d === "⌫") { setPin_(p => p.slice(0, -1)); setError(""); return }
         const next = pin + d
         setPin_(next)
-        if (next.length < PIN_LENGTH) return
+        if (next.length < expectedLen) return
 
         if (currentStep === "verify_old") {
             const result = await unlockStorageKey(next)
@@ -94,10 +148,10 @@ export default function PinSetup({ mode = "setup", storageKeyBytes, onDone, onCa
             if (next !== firstPin) { triggerShake("PINs don't match"); return }
             try {
                 if (mode === "change") {
-                    await rebindStorageKeyToPin(next, unlockedBytes)
+                    await rebindStorageKeyToPin(next, unlockedBytes, pinLength)
                 } else {
                     // setup: use the bytes the app passed in
-                    await bindStorageKeyToPin(next, storageKeyBytes)
+                    await bindStorageKeyToPin(next, storageKeyBytes, pinLength)
                 }
             } catch (e) {
                 triggerShake(e.message)
@@ -150,8 +204,9 @@ export default function PinSetup({ mode = "setup", storageKeyBytes, onDone, onCa
     return (
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#17212b" }}>
             <div style={{ fontSize: 17, fontWeight: 600, color: "#fff" }}>{titles[currentStep]}</div>
+            {showLengthToggle && <LengthToggle value={pinLength} onChange={handleLengthChange} />}
             <div style={{ animation: shake ? "shake 0.4s" : "none" }}>
-                <PinDots value={pin} error={!!error} />
+                <PinDots value={pin} error={!!error} length={expectedLen} />
             </div>
             {error
                 ? <div style={{ fontSize: 13, color: "#ff6b6b", marginBottom: 8 }}>{error}</div>

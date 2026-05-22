@@ -246,8 +246,12 @@ export async function unlockStorageKey(pin) {
  * PIN-derived KEK and removes the raw copy. Caller must pass the bytes from
  * the currently-unlocked session — we cannot extract them from a legacy or
  * already-encrypted key.
+ *
+ * `pinLength` is persisted in the blob so PinLock knows when the user has
+ * finished entering — 4 by default for backward compatibility with installs
+ * that pre-date the choice.
  */
-export async function bindStorageKeyToPin(pin, rawBytes) {
+export async function bindStorageKeyToPin(pin, rawBytes, pinLength = 4) {
     if (!rawBytes) throw new Error("Cannot enable PIN: storage key bytes unavailable (legacy install — please reset keys)")
     const salt = crypto.getRandomValues(new Uint8Array(16))
     const iv = crypto.getRandomValues(new Uint8Array(12))
@@ -256,14 +260,26 @@ export async function bindStorageKeyToPin(pin, rawBytes) {
     const db = await openDB()
     await idbPut(db, IDENTITY, "storage_key_encrypted", {
         salt, iv, data, iterations: PBKDF2_ITERATIONS,
+        pin_length: pinLength,
     })
     await idbDelete(db, IDENTITY, "storage_key_raw")
     localStorage.setItem(LS_HAS_PIN, "1")
 }
 
-/** Re-encrypt the storage key under a new PIN (rotate). */
-export async function rebindStorageKeyToPin(newPin, rawBytes) {
-    await bindStorageKeyToPin(newPin, rawBytes)
+/** Re-encrypt the storage key under a new PIN (rotate). May also change length. */
+export async function rebindStorageKeyToPin(newPin, rawBytes, pinLength = 4) {
+    await bindStorageKeyToPin(newPin, rawBytes, pinLength)
+}
+
+/**
+ * Read the length of the currently-bound PIN. Returns 4 (the historical
+ * default) when no PIN is set or for blobs from builds that pre-date the
+ * length being stored.
+ */
+export async function getPinLength() {
+    const db = await openDB()
+    const blob = await idbGet(db, IDENTITY, "storage_key_encrypted")
+    return blob?.pin_length === 6 ? 6 : 4
 }
 
 /** Disable PIN protection: persist the raw bytes again, drop the encrypted blob. */
