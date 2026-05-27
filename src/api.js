@@ -95,3 +95,13 @@ export async function refillOTKs(oneTimeKeys, initData) {
     if (!res.ok) throw new Error(await res.text())
     return res.json()
 }
+
+export async function submitFeedback({ category, message, appVersion, platform }, initData) {
+    const res = await fetch(`${API_URL}/api/v1/feedback`, {
+        method: "POST",
+        headers: headers(initData),
+        body: JSON.stringify({ category, message, app_version: appVersion, platform }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+}

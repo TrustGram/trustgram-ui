@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Button, Spinner, Modal, Placeholder } from "@telegram-apps/telegram-ui"
-import { fetchInbox, fetchBundle, fetchBundleByUsername } from "../api"
+import { fetchInbox, fetchBundle, fetchBundleByUsername, submitFeedback } from "../api"
 import { saveContact, getContacts, getContactName } from "../contacts"
 import { hasPin } from "../pin"
 import { clearMessages } from "../messageStore"
@@ -67,6 +67,11 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
     const [chatExport, setChatExport] = useState(null)
     const [exportCopied, setExportCopied] = useState(false)
     const [verifyOpen, setVerifyOpen] = useState(false)
+    const [bugOpen, setBugOpen] = useState(false)
+    const [bugCategory, setBugCategory] = useState("other")
+    const [bugMessage, setBugMessage] = useState("")
+    const [bugState, setBugState] = useState("idle") // idle | sending | sent | error
+    const [bugError, setBugError] = useState("")
     const settingsRef = useRef(null)
 
     const commitHash = typeof __COMMIT_HASH__ !== "undefined" ? __COMMIT_HASH__ : "unknown"
@@ -83,6 +88,35 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
     function handleDeleteChat(id) {
         clearMessages(id)
         setDeleteTarget(null)
+    }
+
+    function closeBug() {
+        setBugOpen(false)
+        setBugMessage("")
+        setBugCategory("other")
+        setBugState("idle")
+        setBugError("")
+    }
+
+    async function handleSubmitBug() {
+        const message = bugMessage.trim()
+        if (!message || bugState === "sending") return
+        setBugState("sending")
+        setBugError("")
+        try {
+            await submitFeedback({
+                category: bugCategory,
+                message,
+                appVersion: commitHash.slice(0, 12),
+                platform: window.Telegram?.WebApp?.platform || "unknown",
+            }, getInitData())
+            setBugState("sent")
+        } catch (e) {
+            setBugState("error")
+            setBugError(/not configured/i.test(e.message)
+                ? "Reporting isn't set up on this server yet."
+                : "Couldn't send the report. Please try again later.")
+        }
     }
 
     async function handleExportChat(id, name) {
@@ -281,6 +315,64 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
                 </div>
             )}
 
+            {bugOpen && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} onClick={closeBug}>
+                    <div style={{ background: "#1f2b38", borderRadius: 16, padding: "26px 24px", maxWidth: 360, width: "100%" }} onClick={e => e.stopPropagation()}>
+                        {bugState === "sent" ? (
+                            <div style={{ textAlign: "center" }}>
+                                <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+                                <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6, color: "#e8f0f7" }}>Report sent</div>
+                                <div style={{ fontSize: 13, color: "#708499", marginBottom: 20, lineHeight: 1.5 }}>
+                                    Thanks — your report was delivered. We never see your messages or keys, only what you typed here.
+                                </div>
+                                <button onClick={closeBug} style={{ padding: "10px 32px", borderRadius: 22, border: "none", background: "#2b5278", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>Done</button>
+                            </div>
+                        ) : (
+                            <>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                    <span style={{ fontSize: 22 }}>🐛</span>
+                                    <span style={{ fontSize: 17, fontWeight: 700, color: "#e8f0f7" }}>Report a bug</span>
+                                </div>
+                                <div style={{ fontSize: 12.5, color: "#708499", marginBottom: 16, lineHeight: 1.5 }}>
+                                    Describe what went wrong. Don't include message text or codes — only your username, app version and platform are attached.
+                                </div>
+
+                                <div style={{ fontSize: 11, color: "#4a6070", fontWeight: 700, letterSpacing: "0.8px", textTransform: "uppercase", marginBottom: 8 }}>Category</div>
+                                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+                                    {[["crypto", "Encryption"], ["ui", "Display / UI"], ["delivery", "Delivery"], ["other", "Other"]].map(([val, label]) => (
+                                        <button key={val} onClick={() => setBugCategory(val)} style={{
+                                            padding: "6px 12px", borderRadius: 16, fontSize: 12.5, cursor: "pointer",
+                                            border: bugCategory === val ? "1px solid #2b5278" : "1px solid #2a3a4a",
+                                            background: bugCategory === val ? "#2b5278" : "transparent",
+                                            color: bugCategory === val ? "#fff" : "#a0b8cc", transition: "all 0.12s",
+                                        }}>{label}</button>
+                                    ))}
+                                </div>
+
+                                <textarea
+                                    value={bugMessage}
+                                    onChange={e => setBugMessage(e.target.value.slice(0, 2000))}
+                                    placeholder="What happened? What did you expect?"
+                                    rows={5}
+                                    autoFocus
+                                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #2a3a4a", background: "#17212b", color: "#fff", fontSize: 14, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+                                />
+                                <div style={{ fontSize: 11, color: "#4a6070", textAlign: "right", marginTop: 4 }}>{bugMessage.length}/2000</div>
+
+                                {bugError && <div style={{ fontSize: 13, color: "#ff6b6b", marginTop: 8 }}>{bugError}</div>}
+
+                                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+                                    <button onClick={closeBug} disabled={bugState === "sending"} style={{ padding: "9px 20px", borderRadius: 20, border: "none", background: "#2a3a4a", color: "#a0b8cc", fontSize: 14, cursor: "pointer" }}>Cancel</button>
+                                    <button onClick={handleSubmitBug} disabled={!bugMessage.trim() || bugState === "sending"} style={{ padding: "9px 22px", borderRadius: 20, border: "none", background: !bugMessage.trim() ? "#1e3550" : "#2b5278", color: !bugMessage.trim() ? "#5a7895" : "#fff", fontSize: 14, fontWeight: 600, cursor: !bugMessage.trim() ? "default" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                                        {bugState === "sending" ? <Spinner size="s" /> : "Send report"}
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {chatExport?.state === "error" && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
                     <div style={{ background: "#1f2b38", borderRadius: 16, padding: "24px", maxWidth: 300, width: "100%", textAlign: "center" }}>
@@ -323,6 +415,12 @@ export default function ChatList({ identity, onOpenChat, onResetKeys, onPinSetti
                             <div style={{ padding: "4px 12px 2px", fontSize: 10, color: "#4a6070", fontWeight: 700, letterSpacing: "0.8px", textTransform: "uppercase" }}>Backup</div>
                             <MenuItem icon="💾" label="Export all chats" onClick={() => { setSettingsOpen(false); onExport() }} />
                             <MenuItem icon="📥" label="Import backup" onClick={() => { setSettingsOpen(false); onImport() }} />
+
+                            <div style={{ height: 1, background: "rgba(42,58,74,0.8)", margin: "4px 0" }} />
+
+                            {/* Feedback */}
+                            <div style={{ padding: "4px 12px 2px", fontSize: 10, color: "#4a6070", fontWeight: 700, letterSpacing: "0.8px", textTransform: "uppercase" }}>Feedback</div>
+                            <MenuItem icon="🐛" label="Report a bug" onClick={() => { setSettingsOpen(false); setBugOpen(true) }} />
 
                             <div style={{ height: 1, background: "rgba(42,58,74,0.8)", margin: "4px 0" }} />
 
