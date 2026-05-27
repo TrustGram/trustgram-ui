@@ -76,6 +76,14 @@ export async function fetchOTKCount(initData) {
     return res.json()
 }
 
+export async function checkBundleExists(initData) {
+    const res = await fetch(`${API_URL}/api/v1/keys/me/exists`, {
+        headers: headers(initData),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json() // { exists: boolean }
+}
+
 export async function updateSPK(signedPreKey, signature, initData) {
     const res = await fetch(`${API_URL}/api/v1/keys/spk`, {
         method: "PUT",

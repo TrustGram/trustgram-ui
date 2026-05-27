@@ -13,13 +13,13 @@ import {
     savePendingSPK, loadPendingSPK, clearPendingSPK,
     getSpkRotatedAt, setSpkRotatedAt,
 } from "./storage"
-import { signSPK } from "./crypto"
+import { signSPK, getPublicBundle } from "./crypto"
 import { clearAllMessages } from "./messageStore"
 import { clearAllRatchets } from "./ratchetStore"
 import { clearAllFingerprints } from "./fingerprintStore"
 import { clearContacts } from "./contacts"
 import { hasPin, shouldLockOnOpen, updateLastActivity, getLockInterval, clearLockState } from "./pin"
-import { updateSPK } from "./api"
+import { updateSPK, registerBundle, checkBundleExists } from "./api"
 import { drainInbox } from "./inboxDrain"
 import { refillIfLow } from "./keyHealth"
 
@@ -64,8 +64,36 @@ async function rotateSPK(identity, storageKey, initData, refreshIdentity) {
     await refreshIdentity()
 }
 
+// Re-upload our public bundle if the server no longer has it. This self-heals
+// after server-side data loss (e.g. the bot's DB was reset): the bundle fetch
+// other users rely on for verification would otherwise 404 forever, since the
+// client only registered once at first setup. register is an idempotent upsert.
+async function ensureRegistered(identity, initData) {
+    const { exists } = await checkBundleExists(initData)
+    if (exists) return
+    const pub = await getPublicBundle(identity)
+    await registerBundle({
+        identity_key: pub.identityKey,
+        signing_key: pub.signingKey,
+        signed_pre_key: pub.signedPreKey,
+        signature: pub.signedPreKeySignature,
+        one_time_keys: pub.oneTimePreKeys.map((publicKey, i) => ({
+            key_id: String(i),
+            public_key: publicKey,
+        })),
+    }, initData)
+    console.info("[TrustGram] bundle was missing on the server — re-registered")
+}
+
 async function checkKeyHealth(identity, storageKey, initData, refreshIdentity) {
-    // First, finish any rotation that was interrupted last session.
+    // Self-heal a missing server-side bundle before anything else.
+    try {
+        await ensureRegistered(identity, initData)
+    } catch (e) {
+        console.warn("[TrustGram] bundle re-registration check failed:", e?.message ?? e)
+    }
+
+    // Finish any rotation that was interrupted last session.
     try {
         await finalizePendingSPK(initData, refreshIdentity)
     } catch (e) {
@@ -242,6 +270,12 @@ export default function App() {
         setStorageKey(sk)
         setStorageKeyBytes(rawBytes)
         setLocked(false)
+        // PIN users don't run key health on bootstrap (the app is locked), so
+        // run it now: self-heal a missing bundle, refill OTKs, rotate the SPK.
+        if (identity) {
+            const initData = window.Telegram?.WebApp?.initData || null
+            checkKeyHealth(identity, sk, initData, handleIdentityRefresh).catch(() => {})
+        }
     }
 
     async function handleResetKeys() {
