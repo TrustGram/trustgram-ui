@@ -1,14 +1,14 @@
 import React, { useEffect, useRef, useState } from "react"
 import { Spinner, Placeholder } from "@telegram-apps/telegram-ui"
 import {
-    initiateSession, encryptMessage, decryptMessage,
-    acceptSessionAndDecryptFirstMessage, computeFingerprint,
+    initiateSession, encryptMessage, computeFingerprint,
 } from "../crypto"
-import { fetchBundle, fetchInbox, sendMessage, deleteMessage } from "../api"
-import { loadMessages, saveMessages, clearMessages } from "../messageStore"
-import { consumeOTK, getOtkLastCheck, setOtkLastCheck } from "../storage"
+import { fetchBundle, sendMessage } from "../api"
+import { loadMessages, appendMessages, clearMessages } from "../messageStore"
+import { getOtkLastCheck, setOtkLastCheck } from "../storage"
 import { refillIfLow } from "../keyHealth"
 import { withRatchetLock, clearRatchet } from "../ratchetStore"
+import { processContactInbox } from "../inboxDrain"
 import {
     loadFingerprint, saveFingerprint, verifyFingerprint, clearFingerprint,
 } from "../fingerprintStore"
@@ -77,12 +77,6 @@ async function maybeCompressText(text) {
     const compressed = await compressData(utf8.buffer)
     if (compressed.byteLength >= utf8.byteLength) return { plaintext: text, type: "message" }
     return { plaintext: bufToBase64(compressed), type: "message_zip" }
-}
-
-async function decompressText(b64) {
-    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
-    const buf = await decompressData(bytes.buffer)
-    return new TextDecoder().decode(buf)
 }
 
 function FileCard({ file }) {
@@ -311,23 +305,15 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         refillInProgress.current = false
     }
 
+    // In-memory update only. Durable persistence is handled elsewhere: incoming
+    // messages by the inbox pipeline (processContactInbox → appendMessages), and
+    // outgoing messages by appendMessages after a successful send. Both are
+    // additive + serialized under a per-contact lock, so concurrent writers
+    // can't lost-update each other — unlike the old full-envelope overwrite that
+    // used to race here (and could persist an OLDER history on reload).
     function updateMessages(msgs) {
         messagesRef.current = msgs
         safeSetMessages(msgs)
-        // saveMessages always persists (decrypted history is valuable even if the
-        // component just unmounted — losing the latest poll's messages from disk
-        // is worse than a brief no-op setState).
-        //
-        // Never swallow silently — quota/encoding failures here cause the saved
-        // envelope to fall behind in-memory state, so on next load the user sees
-        // an OLDER history (the bug that made picture-bearing chats look like
-        // they "lost history" on reload).
-        if (storageKey) {
-            saveMessages(contactId, msgs, storageKey).catch(e => {
-                console.error("[TrustGram] saveMessages failed:", e)
-                pushDebug(`✗ save: ${e?.message?.slice(0, 50) ?? "?"}`)
-            })
-        }
     }
 
     useEffect(() => {
@@ -344,111 +330,28 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [messages])
 
-    async function decryptInboxMessages(msgs) {
-        const mine = msgs.filter(m => m.sender_id === contactId)
-        if (msgs.length > 0) pushDebug(`inbox: ${msgs.length} msg, mine: ${mine.length}`)
-        const decrypted = []
-
-        // Process every incoming message under a single ratchet lock so the
-        // chain key advances exactly once per message and concurrent polls /
-        // tabs can't race.
-        await withRatchetLock(contactId, async (initialState) => {
-            let state = initialState
-            for (const msg of mine) {
-                const otkSnippet = (() => { try { return JSON.parse(msg.encrypted_payload)?.senderInfo?.oneTimePreKeyId?.slice(0, 8) ?? "null" } catch { return "?" } })()
-                try {
-                    const payload = JSON.parse(msg.encrypted_payload)
-
-                    if (payload.type && payload.type !== "message" && payload.type !== "file" && payload.type !== "message_zip") {
-                        await deleteMessage(msg.id, initData).catch(() => {})
-                        continue
-                    }
-
-                    // First message of a session — receiver bootstraps via X3DH.
-                    // Subsequent messages reuse the saved state.
-                    //
-                    // acceptSessionAndDecryptFirstMessage internally tries the
-                    // current SPK and each retired SPK, so a sender that cached
-                    // our pre-rotation bundle still decrypts cleanly.
-                    let plaintext
-                    let nextState
-                    if (!state) {
-                        if (!payload.senderInfo) {
-                            throw new Error("No session state and no senderInfo")
-                        }
-                        const res = await acceptSessionAndDecryptFirstMessage(
-                            identityRef.current,
-                            payload.senderInfo,
-                            payload.message,
-                        )
-                        plaintext = res.plaintext
-                        nextState = res.state
-                        if (payload.senderInfo.oneTimePreKeyId) {
-                            consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                        }
-                    } else {
-                        try {
-                            const res = await decryptMessage(state, payload.message)
-                            plaintext = res.plaintext
-                            nextState = res.state
-                        } catch (decryptErr) {
-                            // State exists but doesn't decrypt this message. If the
-                            // sender shipped a senderInfo, they probably restarted
-                            // the session — re-bootstrap (also trying old SPKs).
-                            if (payload.senderInfo) {
-                                pushDebug(`↻ resync #${msg.id} (state mismatch)`)
-                                const res = await acceptSessionAndDecryptFirstMessage(
-                                    identityRef.current,
-                                    payload.senderInfo,
-                                    payload.message,
-                                )
-                                plaintext = res.plaintext
-                                nextState = res.state
-                                if (payload.senderInfo.oneTimePreKeyId) {
-                                    consumeOTK(payload.senderInfo.oneTimePreKeyId).catch(() => {})
-                                }
-                            } else {
-                                throw decryptErr
-                            }
-                        }
-                    }
-                    state = nextState
-
-                    if (payload.type === "file") {
-                        const file = JSON.parse(plaintext)
-                        decrypted.push({ id: msg.id, from: "them", file, text: null, timestamp: msg.timestamp })
-                    } else if (payload.type === "message_zip") {
-                        const text = await decompressText(plaintext)
-                        decrypted.push({ id: msg.id, from: "them", text, timestamp: msg.timestamp })
-                    } else {
-                        decrypted.push({ id: msg.id, from: "them", text: plaintext, timestamp: msg.timestamp })
-                    }
-                    pushDebug(`✓ decrypt #${msg.id} otk:${otkSnippet}`)
-                    await deleteMessage(msg.id, initData).catch(e => pushDebug(`del fail #${msg.id}: ${e.message?.slice(0, 30)}`))
-                    maybeRefillOTKs().catch(() => {})
-                } catch (err) {
-                    console.error("[TrustGram] decrypt failed for msg", msg.id, "otk:", otkSnippet, err?.message, err)
-                    pushDebug(`✗ decrypt #${msg.id} otk:${otkSnippet} err:${err?.message?.slice(0, 40)}`)
-                    decrypted.push({ id: msg.id, from: "them", text: `🔒 [не удалось расшифровать: ${err?.message?.slice(0, 50) ?? "?"}]`, timestamp: msg.timestamp })
-                    await deleteMessage(msg.id, initData).catch(() => {})
-                }
-            }
-            return state  // persisted by withRatchetLock
-        })
-        return decrypted
+    // The inbox pipeline (processContactInbox) lives in inboxDrain.js and is the
+    // single fetch→decrypt→persist→ack path — shared with the pre-SPK-rotation
+    // drain, so there's no divergent copy here. It persists incoming messages
+    // and advances the ratchet under the contact lock, then returns the freshly
+    // decrypted UI messages for us to merge into memory.
+    function inboxCtx() {
+        return { identity: identityRef.current, storageKey, initData, onDebug: pushDebug }
     }
 
     async function loadHistory() {
         safeSetLoading(true)
         try {
-            const [history, inbox] = await Promise.all([
+            // Local history load runs in parallel with the locked inbox pipeline —
+            // they touch different stores. The pipeline persists incoming itself;
+            // here we merge stored history + in-memory + new inbox into state.
+            const [history, decryptedUi] = await Promise.all([
                 storageKey ? loadMessages(contactId, storageKey) : Promise.resolve([]),
-                fetchInbox(initData),
+                processContactInbox(contactId, inboxCtx()),
             ])
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            // Merge stored history + any messages already in state (from concurrent poll) + new inbox
-            const merged = mergeDedupe(mergeDedupe(history, messagesRef.current), decrypted)
+            const merged = mergeDedupe(mergeDedupe(history, messagesRef.current), decryptedUi)
             updateMessages(merged)
+            if (decryptedUi.length > 0) maybeRefillOTKs().catch(() => {})
         } catch (e) {
             safeSetError(e.message)
         } finally {
@@ -458,10 +361,10 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
     async function pollMessages() {
         try {
-            const inbox = await fetchInbox(initData)
-            const decrypted = await decryptInboxMessages(inbox.messages)
-            if (decrypted.length > 0) {
-                updateMessages(mergeDedupe(messagesRef.current, decrypted))
+            const decryptedUi = await processContactInbox(contactId, inboxCtx())
+            if (decryptedUi.length > 0) {
+                updateMessages(mergeDedupe(messagesRef.current, decryptedUi))
+                maybeRefillOTKs().catch(() => {})
             }
         } catch (e) {
             // Don't surface a banner: poll runs every 4s and a single failure
@@ -519,14 +422,9 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
         setInput("")
         inputRef.current?.focus()
         const optimisticId = `me_${Date.now()}`
+        const optimisticMsg = { id: optimisticId, from: "me", text, timestamp: new Date().toISOString() }
         try {
-            const optimistic = mergeDedupe(messagesRef.current, [{
-                id: optimisticId,
-                from: "me",
-                text,
-                timestamp: new Date().toISOString(),
-            }])
-            updateMessages(optimistic)
+            updateMessages(mergeDedupe(messagesRef.current, [optimisticMsg]))
 
             const { plaintext: bodyText, type } = await maybeCompressText(text)
 
@@ -562,6 +460,12 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 pushDebug(`→ send ok${type === "message_zip" ? " (zip)" : ""}`)
                 return nextState
             })
+            // Sent OK — persist the outgoing message durably (memory already
+            // shows it). Additive + serialized, so it can't lost-update. A
+            // persist failure must NOT fail the already-sent message (that would
+            // roll back the UI and prompt a duplicate resend), so log and move on.
+            await appendMessages(contactId, [optimisticMsg], storageKey)
+                .catch(e => pushDebug(`✗ save: ${e?.message?.slice(0, 40) ?? "?"}`))
         } catch (e) {
             console.error("[TrustGram] send failed:", e)
             pushDebug(`✗ send: ${e.message?.slice(0, 50)}`)
@@ -621,10 +525,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
 
             const optimisticFile = { name: file.name, mimeType: file.type, size: file.size, data: base64data, compressed: useCompressed }
             optimisticId = `me_${Date.now()}`
-            updateMessages(mergeDedupe(messagesRef.current, [{
-                id: optimisticId, from: "me", file: optimisticFile, text: null,
-                timestamp: new Date().toISOString(),
-            }]))
+            const optimisticMsg = { id: optimisticId, from: "me", file: optimisticFile, text: null, timestamp: new Date().toISOString() }
+            updateMessages(mergeDedupe(messagesRef.current, [optimisticMsg]))
 
             await withRatchetLock(contactId, async (existingState) => {
                 let state = existingState
@@ -653,6 +555,8 @@ export default function Chat({ identity, storageKey, contactId, contactName, onB
                 pushDebug(`→ file ok`)
                 return nextState
             })
+            await appendMessages(contactId, [optimisticMsg], storageKey)
+                .catch(e => pushDebug(`✗ save: ${e?.message?.slice(0, 40) ?? "?"}`))
         } catch (e) {
             console.error("[TrustGram] file send failed:", e)
             pushDebug(`✗ file: ${e?.message?.slice(0, 50) ?? "?"}`)

@@ -1,4 +1,4 @@
-import { openDB, idbGet, idbPut, idbDelete, STORES } from "./idb"
+import { openDB, idbGet, idbPut, idbDelete, idbUpdate, withLock, STORES } from "./idb"
 
 // IDB keys (in the IDENTITY store):
 //   identity              — full IdentityKeyBundle
@@ -20,6 +20,15 @@ const LS_OTK_LAST_CHECK = "tg_otk_last_check"  // legacy — migrated to IDB
 const IDENTITY = STORES.IDENTITY
 
 const PBKDF2_ITERATIONS = 600000
+
+// Every writer to the single `identity` record (SPK rotation, OTK append, OTK
+// consume) runs under this lock so their read-modify-write cycles can't
+// interleave and clobber each other. Concrete failure it prevents: a refill's
+// freshly-appended OTK batch being overwritten by a concurrent consume (or vice
+// versa), silently dropping OPK private keys — after which inbound first
+// messages that used those OPKs could never be decrypted. withLock serializes
+// both within this tab and across tabs (navigator.locks).
+export const withIdentityLock = fn => withLock("trustgram:identity", fn)
 
 // Chunked base64 — see messageStore.js for rationale.
 function bytesToBase64(bytes) {
@@ -76,19 +85,22 @@ function pruneOldSpks(list) {
 }
 
 export async function updateSPKInIdentity(newSpkKeyPair) {
-    const db = await openDB()
-    const identity = await idbGet(db, IDENTITY, "identity")
-    if (!identity) return
-    const previousSpk = identity.signedPreKey
-    // Push the outgoing SPK onto the front of the history before replacing it,
-    // so the next acceptSession can still try it.
-    const prev = Array.isArray(identity.oldSignedPreKeys) ? identity.oldSignedPreKeys : []
-    identity.oldSignedPreKeys = pruneOldSpks([
-        { keyPair: previousSpk, retiredAt: Date.now() },
-        ...prev,
-    ])
-    identity.signedPreKey = newSpkKeyPair
-    await idbPut(db, IDENTITY, "identity", identity)
+    return withIdentityLock(async () => {
+        const db = await openDB()
+        await idbUpdate(db, IDENTITY, "identity", identity => {
+            if (!identity) return undefined
+            const previousSpk = identity.signedPreKey
+            // Push the outgoing SPK onto the front of the history before replacing
+            // it, so the next acceptSession can still try it.
+            const prev = Array.isArray(identity.oldSignedPreKeys) ? identity.oldSignedPreKeys : []
+            identity.oldSignedPreKeys = pruneOldSpks([
+                { keyPair: previousSpk, retiredAt: Date.now() },
+                ...prev,
+            ])
+            identity.signedPreKey = newSpkKeyPair
+            return identity
+        })
+    })
 }
 
 // ── Pending SPK (crash-safe rotation) ─────────────────────────
@@ -157,11 +169,14 @@ export async function setOtkLastCheck(value) {
 }
 
 export async function appendOTKsToIdentity(newPairs) {
-    const db = await openDB()
-    const identity = await idbGet(db, IDENTITY, "identity")
-    if (!identity) return
-    identity.oneTimePreKeys = [...identity.oneTimePreKeys, ...newPairs]
-    await idbPut(db, IDENTITY, "identity", identity)
+    return withIdentityLock(async () => {
+        const db = await openDB()
+        await idbUpdate(db, IDENTITY, "identity", identity => {
+            if (!identity) return undefined
+            identity.oneTimePreKeys = [...identity.oneTimePreKeys, ...newPairs]
+            return identity
+        })
+    })
 }
 
 /**
@@ -173,17 +188,23 @@ export async function appendOTKsToIdentity(newPairs) {
  * exported public bytes of each stored OPK against the value.
  */
 export async function consumeOTK(usedPublicKeyB64) {
-    const db = await openDB()
-    const identity = await idbGet(db, IDENTITY, "identity")
-    if (!identity) return
-    const filtered = []
-    for (const kp of identity.oneTimePreKeys) {
-        const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
-        const pub = bytesToBase64(new Uint8Array(raw))
-        if (pub !== usedPublicKeyB64) filtered.push(kp)
-    }
-    identity.oneTimePreKeys = filtered
-    await idbPut(db, IDENTITY, "identity", identity)
+    // Held under the identity lock rather than a single IDB transaction: the
+    // exportKey loop below awaits non-IDB promises between the get and the put,
+    // which would auto-close a readwrite transaction. The lock is what makes the
+    // read-modify-write atomic against appendOTKsToIdentity / updateSPKInIdentity.
+    return withIdentityLock(async () => {
+        const db = await openDB()
+        const identity = await idbGet(db, IDENTITY, "identity")
+        if (!identity) return
+        const filtered = []
+        for (const kp of identity.oneTimePreKeys) {
+            const raw = await crypto.subtle.exportKey("raw", kp.publicKey)
+            const pub = bytesToBase64(new Uint8Array(raw))
+            if (pub !== usedPublicKeyB64) filtered.push(kp)
+        }
+        identity.oneTimePreKeys = filtered
+        await idbPut(db, IDENTITY, "identity", identity)
+    })
 }
 
 // ── Storage key (message-history KEK) ─────────────────────────

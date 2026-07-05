@@ -20,7 +20,7 @@ import { clearAllFingerprints } from "./fingerprintStore"
 import { clearContacts } from "./contacts"
 import { hasPin, shouldLockOnOpen, updateLastActivity, getLockInterval, clearLockState } from "./pin"
 import { updateSPK, registerBundle, checkBundleExists } from "./api"
-import { drainInbox } from "./inboxDrain"
+import { drainAllInbox } from "./inboxDrain"
 import { refillIfLow } from "./keyHealth"
 
 const SPK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -39,7 +39,7 @@ async function finalizePendingSPK(initData, refreshIdentity) {
 
 async function rotateSPK(identity, storageKey, initData, refreshIdentity) {
     // 1. Drain inbox so no messages are pending under the old SPK.
-    await drainInbox(identity, storageKey, initData)
+    await drainAllInbox({ identity, storageKey, initData })
 
     // 2. Generate + sign the new key.
     const newSpkKeyPair = await crypto.subtle.generateKey(

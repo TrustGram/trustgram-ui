@@ -10,7 +10,7 @@
 //
 // Legacy localStorage rows are migrated lazily on first load.
 
-import { openDB, idbGet, idbPut, idbDelete, idbClear, STORES } from "./idb"
+import { openDB, idbGet, idbPut, idbDelete, idbClear, STORES, withLock } from "./idb"
 
 const LS_PREFIX = "tg_msgs_"
 
@@ -76,6 +76,42 @@ export async function saveMessages(contactId, messages, storageKey) {
     await idbPut(db, STORES.MESSAGES, String(contactId), {
         iv: toBase64(iv),
         data: toBase64(new Uint8Array(encrypted)),
+    })
+}
+
+// ── Additive, serialized history append ───────────────────────
+// saveMessages() overwrites the whole envelope (used by import). appendMessages()
+// instead merges `additions` into the existing history under a per-contact lock,
+// so concurrent writers (inbox pipeline, post-send, a second tab) can't
+// lost-update each other. This is the durable-write path for the hot flows.
+
+function parseTs(v) {
+    const t = new Date(v).getTime()
+    return Number.isNaN(t) ? 0 : t
+}
+
+function dedupKey(m) {
+    return `${m.id}|${m.timestamp}`
+}
+
+// Stable order: ms timestamp first (NaN-safe), then id (numeric-aware) as tiebreak.
+function compareMessages(x, y) {
+    const dt = parseTs(x.timestamp) - parseTs(y.timestamp)
+    if (dt !== 0) return dt
+    return String(x.id).localeCompare(String(y.id), undefined, { numeric: true })
+}
+
+export function mergeDedupe(existing, additions) {
+    const seen = new Set(existing.map(dedupKey))
+    return [...existing, ...additions.filter(m => !seen.has(dedupKey(m)))].sort(compareMessages)
+}
+
+export async function appendMessages(contactId, additions, storageKey) {
+    if (!additions?.length || !storageKey) return
+    await withLock(`tg-msgs-${contactId}`, async () => {
+        const existing = await loadMessages(contactId, storageKey)
+        const merged = mergeDedupe(existing, additions)
+        await saveMessages(contactId, merged, storageKey)
     })
 }
 

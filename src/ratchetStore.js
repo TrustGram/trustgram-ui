@@ -11,13 +11,26 @@
 // to JS, so the state survives page reloads but cannot be exfiltrated from a
 // disk dump of the IDB.
 //
-// Cross-tab safety: navigator.locks guards load→advance→save so two tabs
-// can't both read state v_n, advance independently, and race to overwrite.
+// Alongside each contact's ratchet state we persist a bounded set of already-
+// processed message ids (key `${id}:processed`). It makes inbox processing
+// idempotent: if a server delete fails or a message is re-delivered, we re-ack
+// it without re-decrypting against an already-advanced ratchet (which would
+// fail and surface a false "couldn't decrypt" placeholder).
+//
+// Cross-tab safety: withLock guards load→advance→save so two tabs can't both
+// read state v_n, advance independently, and race to overwrite. withLock also
+// serializes within a single tab (a promise chain per lock name), so it holds
+// even on browsers without navigator.locks.
 
-import { openDB, idbGet, idbPut, idbDelete, idbClear, STORES } from "./idb"
+import { openDB, idbGet, idbPut, idbDelete, idbClear, idbPutMany, withLock, STORES } from "./idb"
 
-function ratchetLockName(contactId) {
-    return `tg-ratchet-${contactId}`
+// Cap on the persisted processed-id ring. The re-delivery window is tiny (the
+// server deletes acked messages and TTL-reaps the rest within ~1h), so the most
+// recent PROCESSED_MAX ids are more than enough to catch a duplicate.
+const PROCESSED_MAX = 256
+
+function processedKey(contactId) {
+    return `${contactId}:processed`
 }
 
 /**
@@ -35,10 +48,33 @@ export async function saveRatchet(contactId, state) {
     await idbPut(db, STORES.RATCHET, String(contactId), state)
 }
 
+/**
+ * Persist ratchet state AND the processed-id set for `contactId` in a single
+ * transaction. They are two faces of one fact ("these messages were consumed,
+ * the chain advanced") — writing them separately risks a crash desyncing them.
+ * `processedIds` is trimmed to the most recent PROCESSED_MAX.
+ */
+export async function saveRatchetAndProcessed(contactId, state, processedIds) {
+    const db = await openDB()
+    const trimmed = processedIds.length > PROCESSED_MAX ? processedIds.slice(-PROCESSED_MAX) : processedIds
+    await idbPutMany(db, STORES.RATCHET, [
+        [String(contactId), state],
+        [processedKey(contactId), trimmed],
+    ])
+}
+
+/** Load the persisted processed-message-id list for `contactId` (or []). */
+export async function loadProcessedIds(contactId) {
+    const db = await openDB()
+    const ids = await idbGet(db, STORES.RATCHET, processedKey(contactId))
+    return Array.isArray(ids) ? ids : []
+}
+
 /** Drop persisted state — used when a chat is deleted or keys are reset. */
 export async function clearRatchet(contactId) {
     const db = await openDB()
     await idbDelete(db, STORES.RATCHET, String(contactId))
+    await idbDelete(db, STORES.RATCHET, processedKey(contactId))
 }
 
 /** Drop all persisted ratchet state. Used on identity reset. */
@@ -48,26 +84,29 @@ export async function clearAllRatchets() {
 }
 
 /**
- * Run `fn(currentState)` exclusively for this contact — no other tab/poll can
- * read or write the state until fn resolves. `fn` returns the new state
- * (or null to leave unchanged); the new state is persisted before the lock is
- * released.
- *
- * Falls back to direct execution in environments without navigator.locks
- * (very old browsers) — those won't have cross-tab safety but the same-tab
- * race is already avoided by the await-chain.
+ * Run `fn` exclusively for this contact — serialized within this tab AND across
+ * tabs. The lock name (`tg-ratchet-${contactId}`) is shared by the receive
+ * pipeline (processContactInbox) and the send path (withRatchetLock) so an
+ * inbound decrypt and an outbound encrypt for the same contact never interleave
+ * on the ratchet state. `fn` is responsible for its own load/save.
  */
-export async function withRatchetLock(contactId, fn) {
-    const run = async () => {
+export function withContactLock(contactId, fn) {
+    return withLock(`tg-ratchet-${contactId}`, fn)
+}
+
+/**
+ * Thin load→fn→save wrapper for the send path: read current state, let `fn`
+ * advance it (encrypt), persist the returned state. Shares withContactLock so
+ * it's mutually exclusive with the receive pipeline. `fn` may return null to
+ * leave the state unchanged.
+ */
+export function withRatchetLock(contactId, fn) {
+    return withContactLock(contactId, async () => {
         const current = await loadRatchet(contactId)
         const next = await fn(current)
         if (next !== undefined && next !== null) {
             await saveRatchet(contactId, next)
         }
         return next
-    }
-    if (typeof navigator !== "undefined" && navigator.locks?.request) {
-        return navigator.locks.request(ratchetLockName(contactId), run)
-    }
-    return run()
+    })
 }
